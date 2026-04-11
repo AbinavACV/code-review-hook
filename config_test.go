@@ -93,6 +93,26 @@ func TestShouldExcludeFile(t *testing.T) {
 	if ShouldExcludeFile("main.go", patterns) {
 		t.Error("main.go should not be excluded")
 	}
+	if !ShouldExcludeFile("vendor/lib.go", patterns) {
+		t.Error("vendor/** should match vendor/lib.go")
+	}
+	if !ShouldExcludeFile("vendor/sub/deep.go", patterns) {
+		t.Error("vendor/** should match vendor/sub/deep.go")
+	}
+}
+
+func TestFailOnWarningOverridesSeverity(t *testing.T) {
+	tmpDir := t.TempDir()
+	yaml := []byte("fail_on_warning: true\n")
+	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SeverityThreshold != "warning" {
+		t.Errorf("expected severity_threshold to be overridden to 'warning', got %s", cfg.SeverityThreshold)
+	}
 }
 
 func TestResolveAPIKey(t *testing.T) {

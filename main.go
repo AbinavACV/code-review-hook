@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openai/openai-go/v3"
 )
 
 func main() {
@@ -55,6 +57,12 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Log which files are being reviewed.
+	fileNames, _ := GetStagedFileNames(repoRoot)
+	if len(fileNames) > 0 {
+		PrintInfo(fmt.Sprintf("Reviewing %d file(s): %s", len(fileNames), strings.Join(fileNames, ", ")))
+	}
+
 	// Step 5: Resolve API key.
 	apiKey := cfg.ResolveAPIKey()
 	if apiKey == "" {
@@ -79,7 +87,19 @@ func main() {
 		if errors.Is(err, context.DeadlineExceeded) {
 			PrintWarning(fmt.Sprintf("AI review timed out after %ds. Allowing commit.", cfg.TimeoutSeconds))
 		} else {
-			PrintWarning("AI review failed (allowing commit): " + err.Error())
+			var apierr *openai.Error
+			if errors.As(err, &apierr) {
+				switch apierr.StatusCode {
+				case 401:
+					PrintWarning("API authentication failed (invalid API key). Allowing commit.")
+				case 429:
+					PrintWarning("API rate limit exceeded. Allowing commit. Try again shortly.")
+				default:
+					PrintWarning(fmt.Sprintf("API error (HTTP %d): %s. Allowing commit.", apierr.StatusCode, apierr.Message))
+				}
+			} else {
+				PrintWarning("AI review failed (allowing commit): " + err.Error())
+			}
 		}
 		os.Exit(0)
 	}

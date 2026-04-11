@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -47,6 +48,7 @@ func LoadConfig(repoRoot string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		applyEnvOverrides(&cfg)
+		applyFailOnWarning(&cfg)
 		return cfg, nil
 	}
 	if err != nil {
@@ -58,7 +60,15 @@ func LoadConfig(repoRoot string) (Config, error) {
 	}
 
 	applyEnvOverrides(&cfg)
+	applyFailOnWarning(&cfg)
 	return cfg, nil
+}
+
+// applyFailOnWarning overrides severity_threshold when fail_on_warning is set.
+func applyFailOnWarning(cfg *Config) {
+	if cfg.FailOnWarning {
+		cfg.SeverityThreshold = "warning"
+	}
 }
 
 // applyEnvOverrides applies environment variable overrides to the config.
@@ -101,9 +111,18 @@ func (c Config) Validate() error {
 }
 
 // ShouldExcludeFile returns true if the file path matches any of the exclude patterns.
+// Supports ** for recursive directory matching (e.g., "vendor/**").
 func ShouldExcludeFile(path string, patterns []string) bool {
 	baseName := filepath.Base(path)
 	for _, pattern := range patterns {
+		// Handle ** patterns as prefix matching (e.g., "vendor/**" matches "vendor/lib.go")
+		if strings.Contains(pattern, "**") {
+			prefix := strings.SplitN(pattern, "**", 2)[0]
+			if strings.HasPrefix(path, prefix) {
+				return true
+			}
+			continue
+		}
 		if matched, _ := filepath.Match(pattern, baseName); matched {
 			return true
 		}

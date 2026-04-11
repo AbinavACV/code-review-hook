@@ -71,7 +71,12 @@ func GetStagedDiff(repoRoot string) (string, error) {
 
 // GetStagedFileNames returns the list of staged file names.
 func GetStagedFileNames(repoRoot string) ([]string, error) {
-	out, err := runGit(repoRoot, "diff", "--cached", "--name-only", "--diff-filter=ACMR")
+	base := "HEAD"
+	if IsFirstCommit(repoRoot) {
+		base = emptyTreeSHA
+	}
+
+	out, err := runGit(repoRoot, "diff", "--cached", "--name-only", "--diff-filter=ACMR", base)
 	if err != nil {
 		return nil, fmt.Errorf("getting staged file names: %w", err)
 	}
