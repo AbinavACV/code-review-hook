@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,7 +48,6 @@ func LoadConfig(repoRoot string) (Config, error) {
 	path := filepath.Join(repoRoot, ".code-review-hook.yaml")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		applyEnvOverrides(&cfg)
 		applyFailOnWarning(&cfg)
 		return cfg, nil
 	}
@@ -59,7 +59,6 @@ func LoadConfig(repoRoot string) (Config, error) {
 		return cfg, fmt.Errorf("parsing config: %w", err)
 	}
 
-	applyEnvOverrides(&cfg)
 	applyFailOnWarning(&cfg)
 	return cfg, nil
 }
@@ -71,28 +70,82 @@ func applyFailOnWarning(cfg *Config) {
 	}
 }
 
-// applyEnvOverrides applies environment variable overrides to the config.
-// Resolution order: env var > config file > default.
-func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("LLM_BASE_URL"); v != "" {
-		cfg.BaseURL = v
-	}
-	if v := os.Getenv("LLM_MODEL"); v != "" {
-		cfg.Model = v
-	}
-	// API key is resolved separately via ResolveAPIKey.
-}
-
-// ResolveAPIKey returns the API key from the resolution chain:
-// LLM_API_KEY env var > OPENAI_API_KEY env var > config file value.
+// ResolveAPIKey returns the API key from LLM_API_KEY env var or the config file.
 func (c Config) ResolveAPIKey() string {
 	if v := os.Getenv("LLM_API_KEY"); v != "" {
 		return v
 	}
-	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-		return v
-	}
 	return c.APIKey
+}
+
+// CLIFlags holds values parsed from os.Args.
+// Pointer fields distinguish "explicitly set" from "not provided".
+type CLIFlags struct {
+	Model             *string
+	SeverityThreshold *string
+	TimeoutSeconds    *int
+	FailOnWarning     *bool
+	BaseURL           *string
+	MaxDiffLines      *int
+}
+
+// ParseFlagSet parses args using fs and returns only the flags that were
+// explicitly set. Use flag.NewFlagSet for testability.
+func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
+	model := fs.String("model", "", "LLM model name")
+	severity := fs.String("severity-threshold", "", "Minimum severity to block: error, warning, or info")
+	timeout := fs.Int("timeout", 0, "API timeout in seconds (5–120)")
+	failOnWarn := fs.Bool("fail-on-warning", false, "Block commits on warnings (shorthand for --severity-threshold=warning)")
+	baseURL := fs.String("base-url", "", "Base URL of any OpenAI-compatible API")
+	maxDiff := fs.Int("max-diff-lines", 0, "Truncate diffs longer than N lines (min 50)")
+
+	if err := fs.Parse(args); err != nil {
+		return CLIFlags{}, err
+	}
+
+	var flags CLIFlags
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "model":
+			flags.Model = model
+		case "severity-threshold":
+			flags.SeverityThreshold = severity
+		case "timeout":
+			flags.TimeoutSeconds = timeout
+		case "fail-on-warning":
+			flags.FailOnWarning = failOnWarn
+		case "base-url":
+			flags.BaseURL = baseURL
+		case "max-diff-lines":
+			flags.MaxDiffLines = maxDiff
+		}
+	})
+	return flags, nil
+}
+
+// ApplyCLIFlags overlays explicitly-set CLI flags onto cfg.
+// Only non-nil pointer fields are applied.
+func ApplyCLIFlags(cfg *Config, flags CLIFlags) {
+	if flags.Model != nil {
+		cfg.Model = *flags.Model
+	}
+	if flags.SeverityThreshold != nil {
+		cfg.SeverityThreshold = *flags.SeverityThreshold
+	}
+	if flags.TimeoutSeconds != nil {
+		cfg.TimeoutSeconds = *flags.TimeoutSeconds
+	}
+	if flags.FailOnWarning != nil {
+		cfg.FailOnWarning = *flags.FailOnWarning
+	}
+	if flags.BaseURL != nil {
+		cfg.BaseURL = *flags.BaseURL
+	}
+	if flags.MaxDiffLines != nil {
+		cfg.MaxDiffLines = *flags.MaxDiffLines
+	}
+	// Re-apply fail_on_warning logic after overlay.
+	applyFailOnWarning(cfg)
 }
 
 // Validate checks that config values are within acceptable ranges.

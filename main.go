@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -13,25 +14,36 @@ import (
 )
 
 func main() {
-	// Step 1: Determine repository root.
+	// Step 1: Parse CLI flags.
+	cliFlags, err := ParseFlagSet(flag.CommandLine, os.Args[1:])
+	if err != nil {
+		PrintError("Invalid flags: " + err.Error())
+		os.Exit(1)
+	}
+
+	// Step 2: Determine repository root.
 	repoRoot, err := GetRepoRoot()
 	if err != nil {
 		PrintWarning("Could not find git repository: " + err.Error())
 		os.Exit(0)
 	}
 
-	// Step 2: Load configuration (fail open if config is bad).
+	// Step 3: Load configuration (fail open if config is bad).
 	cfg, err := LoadConfig(repoRoot)
 	if err != nil {
 		PrintWarning("Config error (using defaults): " + err.Error())
 		cfg = DefaultConfig()
 	}
+
+	// Apply CLI flags on top (highest precedence after env var for API key).
+	ApplyCLIFlags(&cfg, cliFlags)
+
 	if err := cfg.Validate(); err != nil {
-		PrintWarning("Config validation error (using defaults): " + err.Error())
-		cfg = DefaultConfig()
+		PrintError("Invalid configuration: " + err.Error() + "\nCheck your --flags or .code-review-hook.yaml.")
+		os.Exit(1)
 	}
 
-	// Step 3: Check for staged changes.
+	// Step 4: Check for staged changes.
 	hasChanges, err := HasStagedChanges(repoRoot)
 	if err != nil {
 		PrintWarning("Could not check staged changes: " + err.Error())
@@ -42,7 +54,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Step 4: Get the staged diff.
+	// Step 5: Get the staged diff.
 	diff, err := GetStagedDiff(repoRoot)
 	if err != nil {
 		PrintWarning("Could not get staged diff: " + err.Error())
@@ -63,21 +75,21 @@ func main() {
 		PrintInfo(fmt.Sprintf("Reviewing %d file(s): %s", len(fileNames), strings.Join(fileNames, ", ")))
 	}
 
-	// Step 5: Resolve API key.
+	// Step 6: Resolve API key.
 	apiKey := cfg.ResolveAPIKey()
 	if apiKey == "" {
-		PrintWarning("No API key found (set LLM_API_KEY or OPENAI_API_KEY). Skipping AI review.")
-		os.Exit(0)
+		PrintError("No API key found. Set the LLM_API_KEY environment variable or add 'api_key' to .code-review-hook.yaml.")
+		os.Exit(1)
 	}
 
-	// Step 6: Initialize reviewer.
+	// Step 7: Initialize reviewer.
 	reviewer, err := NewReviewer(cfg)
 	if err != nil {
 		PrintWarning("Could not initialize reviewer: " + err.Error())
 		os.Exit(0)
 	}
 
-	// Step 7: Run review with timeout.
+	// Step 8: Run review with timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -104,10 +116,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Step 8: Display results.
+	// Step 9: Display results.
 	displayResults(result)
 
-	// Step 9: Exit with appropriate code.
+	// Step 10: Exit with appropriate code.
 	if reviewer.ShouldBlock(result) {
 		PrintError("Commit blocked by AI code review. Use --no-verify to bypass.")
 		os.Exit(1)

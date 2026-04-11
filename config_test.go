@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,23 +116,62 @@ func TestFailOnWarningOverridesSeverity(t *testing.T) {
 	}
 }
 
-func TestEnvVarOverrides(t *testing.T) {
+func TestCLIFlagsOverrideYAML(t *testing.T) {
 	tmpDir := t.TempDir()
-
-	os.Setenv("LLM_BASE_URL", "https://custom-gateway.example.com/v1")
-	os.Setenv("LLM_MODEL", "custom-model")
-	defer os.Unsetenv("LLM_BASE_URL")
-	defer os.Unsetenv("LLM_MODEL")
+	yaml := []byte("model: gpt-4o-mini\nseverity_threshold: error\n")
+	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
 
 	cfg, err := LoadConfig(tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.BaseURL != "https://custom-gateway.example.com/v1" {
-		t.Errorf("LLM_BASE_URL not applied, got %s", cfg.BaseURL)
+
+	model := "gpt-4o"
+	severity := "warning"
+	ApplyCLIFlags(&cfg, CLIFlags{Model: &model, SeverityThreshold: &severity})
+
+	if cfg.Model != "gpt-4o" {
+		t.Errorf("CLI --model not applied, got %s", cfg.Model)
 	}
-	if cfg.Model != "custom-model" {
-		t.Errorf("LLM_MODEL not applied, got %s", cfg.Model)
+	if cfg.SeverityThreshold != "warning" {
+		t.Errorf("CLI --severity-threshold not applied, got %s", cfg.SeverityThreshold)
+	}
+}
+
+func TestApplyCLIFlags_NilFieldsUnchanged(t *testing.T) {
+	cfg := DefaultConfig()
+	original := cfg.Model
+	ApplyCLIFlags(&cfg, CLIFlags{}) // all nil
+	if cfg.Model != original {
+		t.Error("nil CLIFlags should leave config unchanged")
+	}
+}
+
+func TestParseFlagSet_ExplicitFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags, err := ParseFlagSet(fs, []string{"--model=gpt-4o", "--severity-threshold=warning"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flags.Model == nil || *flags.Model != "gpt-4o" {
+		t.Error("expected Model to be set to gpt-4o")
+	}
+	if flags.SeverityThreshold == nil || *flags.SeverityThreshold != "warning" {
+		t.Error("expected SeverityThreshold to be set to warning")
+	}
+	if flags.TimeoutSeconds != nil {
+		t.Error("unprovided flag TimeoutSeconds should be nil")
+	}
+}
+
+func TestParseFlagSet_NoFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags, err := ParseFlagSet(fs, []string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flags.Model != nil || flags.SeverityThreshold != nil || flags.TimeoutSeconds != nil {
+		t.Error("no flags passed — all pointer fields should be nil")
 	}
 }
 
@@ -153,21 +193,13 @@ func TestResolveAPIKey(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.APIKey = "from-config"
 
-	// Config fallback
+	// Config fallback when no env var set.
 	os.Unsetenv("LLM_API_KEY")
-	os.Unsetenv("OPENAI_API_KEY")
 	if got := cfg.ResolveAPIKey(); got != "from-config" {
 		t.Errorf("expected from-config, got %s", got)
 	}
 
-	// OPENAI_API_KEY takes precedence over config
-	os.Setenv("OPENAI_API_KEY", "from-openai")
-	defer os.Unsetenv("OPENAI_API_KEY")
-	if got := cfg.ResolveAPIKey(); got != "from-openai" {
-		t.Errorf("expected from-openai, got %s", got)
-	}
-
-	// LLM_API_KEY takes precedence over everything
+	// LLM_API_KEY takes precedence over config file value.
 	os.Setenv("LLM_API_KEY", "from-llm")
 	defer os.Unsetenv("LLM_API_KEY")
 	if got := cfg.ResolveAPIKey(); got != "from-llm" {
