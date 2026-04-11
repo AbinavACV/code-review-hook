@@ -32,8 +32,13 @@ file_exclude_patterns:
   - "vendor/**"
   - "*.min.js"
 
-# Additional instructions appended to the system prompt.
-# Use this to enforce team-specific conventions.
+# Path to a markdown file with team code review rules (relative to repo root).
+# The file content is injected into the system prompt as a "Team rules" section.
+# CLI flag: --rules-file
+# rules_file: rules.md
+
+# Additional instructions appended to the system prompt (after team rules).
+# Use this for ad-hoc per-repo tweaks. For extensive rules, use rules_file instead.
 # No CLI flag equivalent — set this in the YAML file.
 # custom_prompt: |
 #   This project follows the Google Go style guide.

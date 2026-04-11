@@ -38,6 +38,9 @@ func main() {
 	// Apply CLI flags on top (highest precedence after env var for API key).
 	ApplyCLIFlags(&cfg, cliFlags)
 
+	// Load rules file content (after CLI flags so --rules-file takes precedence).
+	LoadRulesContent(repoRoot, &cfg)
+
 	if err := cfg.Validate(); err != nil {
 		PrintError("Invalid configuration: " + err.Error() + "\nCheck your --flags or .code-review-hook.yaml.")
 		os.Exit(1)

@@ -37,7 +37,7 @@ On the next `git commit`, the hook runs automatically.
 
 ## Configuration
 
-There are two ways to configure the hook. CLI flags take precedence over the YAML file.
+There are two ways to configure the hook. CLI flags (via `args:`) take precedence over the YAML config file.
 
 ### Option 1 — `args:` in `.pre-commit-config.yaml`
 
@@ -53,18 +53,21 @@ repos:
           - --model=gpt-4o
           - --severity-threshold=warning
           - --base-url=https://my-gateway.example.com/v1
+          - --rules-file=rules.md
 ```
 
 ### Option 2 — `.code-review-hook.yaml` in the repo root
 
-Best for teams sharing a full config, including file exclusions and custom prompts.
+Best for teams sharing a full config, including file exclusions, custom prompts, and team rules.
 
 ```yaml
 model: gpt-4o-mini
+base_url: https://api.openai.com/v1
 severity_threshold: error
 max_diff_lines: 500
 timeout_seconds: 30
 fail_on_warning: false
+rules_file: rules.md
 
 file_exclude_patterns:
   - "*.lock"
@@ -89,21 +92,58 @@ Copy `.code-review-hook.yaml.example` from this repo as a starting point.
 | `severity_threshold` | string | `error` | `--severity-threshold` | Minimum severity to block: `error`, `warning`, `info` |
 | `fail_on_warning` | bool | `false` | `--fail-on-warning` | Shorthand for `severity_threshold: warning` |
 | `max_diff_lines` | int | `500` | `--max-diff-lines` | Truncate diffs longer than N lines (min 50) |
-| `timeout_seconds` | int | `30` | `--timeout` | API call timeout in seconds (5–120) |
+| `timeout_seconds` | int | `30` | `--timeout` | API call timeout in seconds (5-120) |
 | `file_exclude_patterns` | []string | `["*.lock", "go.sum", "*.pb.go", "vendor/**"]` | — | Glob patterns for files to skip |
-| `custom_prompt` | string | `""` | — | Extra instructions appended to the system prompt |
+| `rules_file` | string | `""` | `--rules-file` | Path to a markdown file with team review rules (relative to repo root) |
+| `custom_prompt` | string | `""` | — | Extra instructions appended to the system prompt (after rules) |
+
+### Precedence
+
+```
+CLI flags (--model, --severity-threshold, etc.)
+    ↓ overrides
+.code-review-hook.yaml
+    ↓ overrides
+built-in defaults
+```
+
+For the API key specifically: `LLM_API_KEY` env var > `api_key` in `.code-review-hook.yaml`.
 
 ### API key
 
-The API key is the only setting that must be provided as an environment variable (to keep it out of version control and shell history):
+The API key must be provided via the `LLM_API_KEY` environment variable or the `api_key` field in `.code-review-hook.yaml`. If neither is set, the hook exits with an error.
 
 ```bash
 export LLM_API_KEY=sk-...
 ```
 
-Alternatively, add `api_key` to `.code-review-hook.yaml` — but do not commit that file if it contains a real key.
+Do not commit `.code-review-hook.yaml` if it contains a real key. Use the env var instead.
 
-**Precedence:** `LLM_API_KEY` env var → `api_key` in `.code-review-hook.yaml`
+---
+
+## Team Rules
+
+For teams with specific coding standards, create a markdown file (e.g., `rules.md`) with your review rules and point the hook at it:
+
+```yaml
+# .code-review-hook.yaml
+rules_file: rules.md
+```
+
+Or via CLI flag:
+
+```yaml
+# .pre-commit-config.yaml
+hooks:
+  - id: ai-code-review
+    args: [--rules-file=rules.md]
+```
+
+The file content is injected into the AI's system prompt as a "Team rules" section, giving the model team-specific context for every review. Rules are loaded before `custom_prompt` in the prompt -- rules define the baseline, `custom_prompt` adds ad-hoc tweaks on top.
+
+See `rules.md.example` in this repo for a Python-focused starting point you can adapt to your stack.
+
+If the rules file is missing, the hook warns and continues without rules (fail-open).
 
 ---
 
@@ -167,10 +207,16 @@ git commit
 pre-commit triggers the hook
     │
     ▼
-Load config (.code-review-hook.yaml + CLI flags)
+Parse CLI flags, load .code-review-hook.yaml, load rules file
     │
     ▼
-git diff --cached → filter binary files and excluded paths
+Resolve API key (LLM_API_KEY env var or config file)
+    │
+    ▼
+git diff --cached → strip binary files → filter excluded paths
+    │
+    ▼
+Build system prompt (base + team rules + custom prompt)
     │
     ▼
 Send diff to LLM → parse structured JSON response
@@ -180,10 +226,16 @@ Display issues to terminal (stderr, colored)
     │
     ▼
 Issues at/above severity_threshold → exit 1 (BLOCK)
-No blocking issues              → exit 0 (ALLOW)
+No blocking issues                 → exit 0 (ALLOW)
 ```
 
-**Fail-open:** API errors, timeouts, and network failures never block a commit. Only explicit AI findings above the threshold block.
+### Error handling
+
+The hook follows a **fail-open** principle for infrastructure failures. API errors, timeouts, rate limits, network issues, missing rules files, and malformed config files all result in a warning and `exit 0` (allow commit). The only scenarios that block a commit (`exit 1`) are:
+
+- The AI explicitly identifies code issues at or above the severity threshold
+- The API key is missing entirely (configuration error, not infrastructure failure)
+- CLI flags or config values are invalid (e.g., `--severity-threshold=critical`)
 
 ---
 

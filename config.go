@@ -19,6 +19,8 @@ type Config struct {
 	SeverityThreshold   string   `yaml:"severity_threshold"`
 	FileExcludePatterns []string `yaml:"file_exclude_patterns"`
 	CustomPrompt        string   `yaml:"custom_prompt"`
+	RulesFile           string   `yaml:"rules_file"`
+	RulesContent        string   `yaml:"-"`
 	FailOnWarning       bool     `yaml:"fail_on_warning"`
 	TimeoutSeconds      int      `yaml:"timeout_seconds"`
 }
@@ -40,8 +42,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadConfig reads .code-review-hook.yaml from repoRoot, overlays onto defaults,
-// then applies environment variable overrides.
+// LoadConfig reads .code-review-hook.yaml from repoRoot and overlays onto defaults.
 func LoadConfig(repoRoot string) (Config, error) {
 	cfg := DefaultConfig()
 
@@ -87,6 +88,7 @@ type CLIFlags struct {
 	FailOnWarning     *bool
 	BaseURL           *string
 	MaxDiffLines      *int
+	RulesFile         *string
 }
 
 // ParseFlagSet parses args using fs and returns only the flags that were
@@ -98,6 +100,7 @@ func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
 	failOnWarn := fs.Bool("fail-on-warning", false, "Block commits on warnings (shorthand for --severity-threshold=warning)")
 	baseURL := fs.String("base-url", "", "Base URL of any OpenAI-compatible API")
 	maxDiff := fs.Int("max-diff-lines", 0, "Truncate diffs longer than N lines (min 50)")
+	rulesFile := fs.String("rules-file", "", "Path to a markdown file with team code review rules (relative to repo root)")
 
 	if err := fs.Parse(args); err != nil {
 		return CLIFlags{}, err
@@ -118,6 +121,8 @@ func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
 			flags.BaseURL = baseURL
 		case "max-diff-lines":
 			flags.MaxDiffLines = maxDiff
+		case "rules-file":
+			flags.RulesFile = rulesFile
 		}
 	})
 	return flags, nil
@@ -144,6 +149,9 @@ func ApplyCLIFlags(cfg *Config, flags CLIFlags) {
 	if flags.MaxDiffLines != nil {
 		cfg.MaxDiffLines = *flags.MaxDiffLines
 	}
+	if flags.RulesFile != nil {
+		cfg.RulesFile = *flags.RulesFile
+	}
 	// Re-apply fail_on_warning logic after overlay.
 	applyFailOnWarning(cfg)
 }
@@ -161,6 +169,26 @@ func (c Config) Validate() error {
 		return fmt.Errorf("timeout_seconds must be between 5 and 120")
 	}
 	return nil
+}
+
+// LoadRulesContent reads the rules file specified by cfg.RulesFile (relative to repoRoot)
+// and stores the trimmed content in cfg.RulesContent. Warns and continues if the file
+// is missing or unreadable (fail-open).
+func LoadRulesContent(repoRoot string, cfg *Config) {
+	if cfg.RulesFile == "" {
+		return
+	}
+	path := filepath.Join(repoRoot, cfg.RulesFile)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		PrintWarning("rules_file not found: " + path)
+		return
+	}
+	if err != nil {
+		PrintWarning("Could not read rules_file: " + err.Error())
+		return
+	}
+	cfg.RulesContent = strings.TrimSpace(string(data))
 }
 
 // ShouldExcludeFile returns true if the file path matches any of the exclude patterns.

@@ -87,7 +87,7 @@ func (r *Reviewer) Review(ctx context.Context, diff string) (*ReviewResult, erro
 		PrintWarning("Diff truncated to " + strconv.Itoa(r.cfg.MaxDiffLines) + " lines")
 	}
 
-	systemPrompt := buildSystemPrompt(r.cfg.CustomPrompt)
+	systemPrompt := buildSystemPrompt(r.cfg.RulesContent, r.cfg.CustomPrompt)
 	content, err := r.chat.Complete(ctx, systemPrompt, "Please review this git diff:\n\n"+truncated)
 	if err != nil {
 		return nil, fmt.Errorf("LLM API call failed: %w", err)
@@ -136,7 +136,7 @@ func truncateDiff(diff string, maxLines int) (string, bool) {
 	return strings.Join(lines[:maxLines], "\n") + "\n\n[... diff truncated at " + strconv.Itoa(maxLines) + " lines ...]", true
 }
 
-func buildSystemPrompt(customPrompt string) string {
+func buildSystemPrompt(rulesContent, customPrompt string) string {
 	base := `You are an expert code reviewer. You will be given a git diff of staged changes.
 
 Review the changes for:
@@ -162,8 +162,11 @@ Respond in this exact JSON format:
 If there are no issues, return verdict "approve" with an empty issues array.
 Only return valid JSON. Do not include markdown code fences.`
 
+	if rulesContent != "" {
+		base += "\n\nTeam rules:\n" + rulesContent
+	}
 	if customPrompt != "" {
-		return base + "\n\nAdditional instructions:\n" + customPrompt
+		base += "\n\nAdditional instructions:\n" + customPrompt
 	}
 	return base
 }

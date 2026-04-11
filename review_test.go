@@ -125,7 +125,7 @@ func TestReview_BlocksAtWarningThreshold(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_WithCustomPrompt(t *testing.T) {
-	prompt := buildSystemPrompt("Focus on security only.")
+	prompt := buildSystemPrompt("", "Focus on security only.")
 	if !strings.Contains(prompt, "Focus on security only.") {
 		t.Error("custom prompt should be appended to system prompt")
 	}
@@ -135,9 +135,37 @@ func TestBuildSystemPrompt_WithCustomPrompt(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_NoCustomPrompt(t *testing.T) {
-	prompt := buildSystemPrompt("")
+	prompt := buildSystemPrompt("", "")
 	if strings.Contains(prompt, "Additional instructions") {
 		t.Error("should not include 'Additional instructions' when no custom prompt")
+	}
+	if strings.Contains(prompt, "Team rules") {
+		t.Error("should not include 'Team rules' when no rules content")
+	}
+}
+
+func TestBuildSystemPrompt_WithRulesContent(t *testing.T) {
+	prompt := buildSystemPrompt("Do not use eval().", "")
+	if !strings.Contains(prompt, "Team rules:") {
+		t.Error("should include 'Team rules:' section header")
+	}
+	if !strings.Contains(prompt, "Do not use eval().") {
+		t.Error("rules content should appear in prompt")
+	}
+	if strings.Contains(prompt, "Additional instructions") {
+		t.Error("should not include 'Additional instructions' when no custom prompt")
+	}
+}
+
+func TestBuildSystemPrompt_RulesBeforeCustom(t *testing.T) {
+	prompt := buildSystemPrompt("Rule: no eval", "Extra: be strict")
+	rulesIdx := strings.Index(prompt, "Team rules:")
+	customIdx := strings.Index(prompt, "Additional instructions:")
+	if rulesIdx == -1 || customIdx == -1 {
+		t.Fatal("both sections should be present")
+	}
+	if rulesIdx >= customIdx {
+		t.Error("Team rules should appear before Additional instructions")
 	}
 }
 

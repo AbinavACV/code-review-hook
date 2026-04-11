@@ -1,0 +1,45 @@
+# Code Review Rules — Python
+
+These rules are injected into the AI code review prompt via the `rules_file` config option.
+Write rules as clear, actionable statements. The AI will use them as the basis for reviewing diffs.
+
+---
+
+## Security
+
+- Flag any use of `eval()`, `exec()`, or `__import__()` as **error** severity.
+- SQL queries must use parameterized queries. Raw string interpolation into SQL is **error** severity.
+- Flag hardcoded secrets, API keys, passwords, or tokens as **error** severity. These belong in environment variables or a secrets manager.
+- All user input from HTTP requests must be validated before use. Missing validation is **warning** severity.
+- Flag use of `pickle.loads()` or `yaml.load()` (without `Loader=SafeLoader`) on untrusted data as **error** severity.
+
+## Error Handling
+
+- Bare `except:` or `except Exception:` that silently swallows errors (no logging, no re-raise) is **warning** severity.
+- Functions that interact with external systems (network, filesystem, databases) must handle exceptions. Missing error handling is **warning** severity.
+- Do not use `assert` for runtime validation in production code — assertions are stripped by `python -O`. Use explicit `if/raise` instead. Flag as **warning** severity.
+
+## Style & Structure
+
+- Functions longer than 50 lines should be flagged as **info** severity with a suggestion to extract helper functions.
+- All public functions and classes must have docstrings. Missing docstrings are **info** severity.
+- Use type hints on all function signatures. Missing type hints on new functions are **info** severity.
+- Prefer `pathlib.Path` over `os.path` for filesystem operations in new code. Flag `os.path` usage as **info** severity.
+- Imports must be ordered: standard library, third-party, local. Use `isort`-compatible ordering.
+
+## Testing
+
+- New public functions should have corresponding test coverage. If a diff adds a public function with no test in the same PR, flag as **info** severity.
+- Test functions must have descriptive names that explain the scenario, not just `test_1`, `test_2`. Flag generic test names as **info** severity.
+- Do not use `time.sleep()` in tests. Use mocks or event-based waiting instead. Flag as **warning** severity.
+
+## Performance
+
+- Flag N+1 query patterns (queries inside loops) as **warning** severity.
+- List comprehensions are preferred over `map()`/`filter()` with lambdas for readability. Flag as **info** severity.
+- Flag unbounded `SELECT *` queries without `LIMIT` as **warning** severity in any code that handles user-facing requests.
+
+## Dependencies
+
+- Adding a new dependency (new entry in `requirements.txt`, `pyproject.toml`, or `setup.py`) should be flagged as **info** severity so a human reviewer can evaluate the dependency.
+- Flag pinned dependencies without a comment explaining why they are pinned as **info** severity.

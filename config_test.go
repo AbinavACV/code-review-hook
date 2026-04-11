@@ -189,6 +189,69 @@ func TestValidateTimeoutBounds(t *testing.T) {
 	}
 }
 
+func TestLoadRulesContent_FileExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	rules := "  Do not use eval().  \n"
+	os.WriteFile(filepath.Join(tmpDir, "rules.md"), []byte(rules), 0644)
+
+	cfg := DefaultConfig()
+	cfg.RulesFile = "rules.md"
+	LoadRulesContent(tmpDir, &cfg)
+	if cfg.RulesContent != "Do not use eval()." {
+		t.Errorf("expected trimmed content, got %q", cfg.RulesContent)
+	}
+}
+
+func TestLoadRulesContent_FileMissing(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RulesFile = "nonexistent.md"
+	LoadRulesContent(t.TempDir(), &cfg)
+	if cfg.RulesContent != "" {
+		t.Error("missing rules file should leave RulesContent empty")
+	}
+}
+
+func TestLoadRulesContent_EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "rules.md"), []byte("   \n  "), 0644)
+
+	cfg := DefaultConfig()
+	cfg.RulesFile = "rules.md"
+	LoadRulesContent(tmpDir, &cfg)
+	if cfg.RulesContent != "" {
+		t.Error("empty/whitespace-only rules file should produce empty RulesContent")
+	}
+}
+
+func TestLoadRulesContent_NotSet(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RulesContent = "should remain"
+	LoadRulesContent(t.TempDir(), &cfg)
+	if cfg.RulesContent != "should remain" {
+		t.Error("LoadRulesContent should no-op when RulesFile is empty")
+	}
+}
+
+func TestParseFlagSet_RulesFile(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags, err := ParseFlagSet(fs, []string{"--rules-file=rules.md"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flags.RulesFile == nil || *flags.RulesFile != "rules.md" {
+		t.Error("expected RulesFile to be set to rules.md")
+	}
+}
+
+func TestApplyCLIFlags_RulesFile(t *testing.T) {
+	cfg := DefaultConfig()
+	rf := "custom-rules.md"
+	ApplyCLIFlags(&cfg, CLIFlags{RulesFile: &rf})
+	if cfg.RulesFile != "custom-rules.md" {
+		t.Errorf("expected RulesFile to be custom-rules.md, got %s", cfg.RulesFile)
+	}
+}
+
 func TestResolveAPIKey(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.APIKey = "from-config"
