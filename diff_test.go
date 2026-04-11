@@ -67,6 +67,7 @@ func TestExtractFilename(t *testing.T) {
 		{"diff --git a/main.go b/main.go", "main.go"},
 		{"diff --git a/src/utils.go b/src/utils.go", "src/utils.go"},
 		{"diff --git a/old.go b/new.go", "new.go"},
+		{"not a diff line", ""},
 	}
 	for _, tt := range tests {
 		got := extractFilename(tt.line)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,90 @@ func TestReview_APIFailure(t *testing.T) {
 	_, err := reviewer.Review(context.Background(), "+ code")
 	if err == nil {
 		t.Error("expected error from API failure")
+	}
+}
+
+func TestReview_MalformedResponse(t *testing.T) {
+	reviewer := &Reviewer{
+		chat: &mockChatClient{response: "not valid json {{{"},
+		cfg:  DefaultConfig(),
+	}
+	_, err := reviewer.Review(context.Background(), "+ code")
+	if err == nil {
+		t.Error("expected error from malformed JSON response")
+	}
+}
+
+func TestReview_InfoDoesNotBlockAtErrorThreshold(t *testing.T) {
+	reviewer := &Reviewer{
+		chat: &mockChatClient{
+			response: `{"verdict":"request_changes","summary":"Style nit","issues":[{"severity":"info","file":"main.go","line":1,"message":"consider a comment"}]}`,
+		},
+		cfg: DefaultConfig(), // severity_threshold = "error"
+	}
+	result, err := reviewer.Review(context.Background(), "+ code")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reviewer.ShouldBlock(result) {
+		t.Error("info-severity issue should not block when threshold is error")
+	}
+}
+
+func TestReview_BlocksAtWarningThreshold(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SeverityThreshold = "warning"
+	reviewer := &Reviewer{
+		chat: &mockChatClient{
+			response: `{"verdict":"request_changes","summary":"Style issue","issues":[{"severity":"warning","file":"main.go","line":5,"message":"rename this"}]}`,
+		},
+		cfg: cfg,
+	}
+	result, err := reviewer.Review(context.Background(), "+ code")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reviewer.ShouldBlock(result) {
+		t.Error("warning should block when threshold is warning")
+	}
+}
+
+func TestBuildSystemPrompt_WithCustomPrompt(t *testing.T) {
+	prompt := buildSystemPrompt("Focus on security only.")
+	if !strings.Contains(prompt, "Focus on security only.") {
+		t.Error("custom prompt should be appended to system prompt")
+	}
+	if !strings.Contains(prompt, "Additional instructions") {
+		t.Error("should include 'Additional instructions' label before custom prompt")
+	}
+}
+
+func TestBuildSystemPrompt_NoCustomPrompt(t *testing.T) {
+	prompt := buildSystemPrompt("")
+	if strings.Contains(prompt, "Additional instructions") {
+		t.Error("should not include 'Additional instructions' when no custom prompt")
+	}
+}
+
+func TestSeverityLevel_AllLevels(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"error", 3},
+		{"ERROR", 3},
+		{"warning", 2},
+		{"Warning", 2},
+		{"info", 1},
+		{"INFO", 1},
+		{"unknown", 0},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		got := severityLevel(tt.input)
+		if got != tt.expected {
+			t.Errorf("severityLevel(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
 	}
 }
 

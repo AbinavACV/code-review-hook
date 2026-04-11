@@ -115,6 +115,40 @@ func TestFailOnWarningOverridesSeverity(t *testing.T) {
 	}
 }
 
+func TestEnvVarOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	os.Setenv("LLM_BASE_URL", "https://custom-gateway.example.com/v1")
+	os.Setenv("LLM_MODEL", "custom-model")
+	defer os.Unsetenv("LLM_BASE_URL")
+	defer os.Unsetenv("LLM_MODEL")
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BaseURL != "https://custom-gateway.example.com/v1" {
+		t.Errorf("LLM_BASE_URL not applied, got %s", cfg.BaseURL)
+	}
+	if cfg.Model != "custom-model" {
+		t.Errorf("LLM_MODEL not applied, got %s", cfg.Model)
+	}
+}
+
+func TestValidateTimeoutBounds(t *testing.T) {
+	tooLow := DefaultConfig()
+	tooLow.TimeoutSeconds = 4
+	if err := tooLow.Validate(); err == nil {
+		t.Error("timeout_seconds below 5 should fail validation")
+	}
+
+	tooHigh := DefaultConfig()
+	tooHigh.TimeoutSeconds = 121
+	if err := tooHigh.Validate(); err == nil {
+		t.Error("timeout_seconds above 120 should fail validation")
+	}
+}
+
 func TestResolveAPIKey(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.APIKey = "from-config"
