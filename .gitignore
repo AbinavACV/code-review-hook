@@ -1,0 +1,8 @@
+plans/
+
+# compiled binary
+/code-review-hook
+
+# test coverage output
+*.out
+coverage.html

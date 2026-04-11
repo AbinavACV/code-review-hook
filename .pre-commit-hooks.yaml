@@ -1,0 +1,8 @@
+- id: ai-code-review
+  name: AI Code Review
+  description: AI-powered code review via any OpenAI-compatible LLM. Set LLM_API_KEY (or OPENAI_API_KEY) env var.
+  entry: code-review-hook
+  language: golang
+  pass_filenames: false
+  always_run: true
+  stages: [pre-commit]

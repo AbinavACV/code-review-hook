@@ -1,0 +1,40 @@
+# code-review-hook configuration
+# Copy this file to .code-review-hook.yaml in your repo root to customize behavior.
+
+# LLM endpoint configuration
+# Override with LLM_BASE_URL, LLM_API_KEY, LLM_MODEL env vars
+base_url: https://api.openai.com/v1    # or your LLM gateway URL
+api_key: ""                             # prefer env vars over committing keys
+model: gpt-4o-mini                      # any model your endpoint supports
+
+# Maximum number of diff lines to send to the LLM.
+# Larger diffs cost more tokens. Diff is truncated if it exceeds this.
+max_diff_lines: 500
+
+# Severity level that triggers a commit block.
+# Options: error (default), warning, info
+#   "error"   = only block on bugs and security issues
+#   "warning" = also block on performance issues
+#   "info"    = block on style issues too (very strict)
+severity_threshold: error
+
+# Glob patterns for files to exclude from review.
+# Useful for generated files, lock files, and vendored code.
+file_exclude_patterns:
+  - "*.lock"
+  - "go.sum"
+  - "*.pb.go"
+  - "vendor/**"
+  - "*.min.js"
+
+# Additional instructions appended to the system prompt.
+# Use this to enforce team-specific conventions.
+# custom_prompt: |
+#   This project follows the Google Go style guide.
+#   Flag any exported function without a godoc comment as a warning.
+
+# Whether to block commits on warnings (overrides severity_threshold for warnings).
+fail_on_warning: false
+
+# Timeout for the LLM API call in seconds.
+timeout_seconds: 30
