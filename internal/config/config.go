@@ -25,6 +25,8 @@ type Config struct {
 	RulesContent        string   `yaml:"-"`
 	FailOnWarning       bool     `yaml:"fail_on_warning"`
 	TimeoutSeconds      int      `yaml:"timeout_seconds"`
+	SaveComments        bool     `yaml:"save_comments"`
+	CommentsDir         string   `yaml:"comments_dir"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -41,6 +43,8 @@ func Default() Config {
 			"vendor/**",
 		},
 		TimeoutSeconds: 30,
+		SaveComments:   true,
+		CommentsDir:    "comments",
 	}
 }
 
@@ -90,6 +94,8 @@ type Flags struct {
 	BaseURL           *string
 	MaxDiffLines      *int
 	RulesFile         *string
+	SaveComments      *bool
+	CommentsDir       *string
 }
 
 // ParseFlags parses args using fs and returns only the flags that were
@@ -102,6 +108,8 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 	baseURL := fs.String("base-url", "", "Base URL of any OpenAI-compatible API")
 	maxDiff := fs.Int("max-diff-lines", 0, "Truncate diffs longer than N lines (min 50)")
 	rulesFile := fs.String("rules-file", "", "Path to a markdown file with team code review rules (relative to repo root)")
+	saveComments := fs.Bool("save-comments", true, "Save review comments to a markdown file under <comments-dir>/<branch>.md")
+	commentsDir := fs.String("comments-dir", "", "Directory for review comment files (relative to repo root)")
 
 	if err := fs.Parse(args); err != nil {
 		return Flags{}, err
@@ -124,6 +132,10 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 			flags.MaxDiffLines = maxDiff
 		case "rules-file":
 			flags.RulesFile = rulesFile
+		case "save-comments":
+			flags.SaveComments = saveComments
+		case "comments-dir":
+			flags.CommentsDir = commentsDir
 		}
 	})
 	return flags, nil
@@ -152,6 +164,12 @@ func ApplyFlags(cfg *Config, flags Flags) {
 	}
 	if flags.RulesFile != nil {
 		cfg.RulesFile = *flags.RulesFile
+	}
+	if flags.SaveComments != nil {
+		cfg.SaveComments = *flags.SaveComments
+	}
+	if flags.CommentsDir != nil {
+		cfg.CommentsDir = *flags.CommentsDir
 	}
 	applyFailOnWarning(cfg)
 }

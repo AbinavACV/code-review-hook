@@ -12,6 +12,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 
+	"github.com/AbinavACV/code-review-hook/internal/comments"
 	"github.com/AbinavACV/code-review-hook/internal/config"
 	"github.com/AbinavACV/code-review-hook/internal/diff"
 	"github.com/AbinavACV/code-review-hook/internal/output"
@@ -113,6 +114,20 @@ func main() {
 	}
 
 	displayResults(result)
+
+	if cfg.SaveComments {
+		branch, err := diff.CurrentBranch(repoRoot)
+		if err != nil {
+			output.PrintWarning("Could not detect branch for comment file: " + err.Error())
+		} else {
+			hunks := diff.Hunks(stagedDiff)
+			if err := comments.Write(repoRoot, cfg.CommentsDir, branch, result, hunks); err != nil {
+				output.PrintWarning("Could not save review comments: " + err.Error())
+			} else {
+				output.PrintInfo("Review comments saved to " + cfg.CommentsDir + "/" + comments.SanitizeBranch(branch) + ".md")
+			}
+		}
+	}
 
 	if reviewer.ShouldBlock(result) {
 		output.PrintError("Commit blocked by AI code review. Use --no-verify to bypass.")

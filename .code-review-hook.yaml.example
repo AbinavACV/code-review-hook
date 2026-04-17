@@ -51,3 +51,10 @@ fail_on_warning: false
 # Timeout for the LLM API call in seconds (5–120).
 # CLI flag: --timeout
 timeout_seconds: 30
+
+# Save the LLM review (summary + per-issue patch snippets) to a markdown file
+# named after the current branch. The file is overwritten on each run so it
+# always reflects the latest review for that branch.
+# CLI flags: --save-comments=false to disable, --comments-dir to change path
+save_comments: true
+comments_dir: comments

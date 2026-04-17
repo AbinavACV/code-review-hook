@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/AbinavACV/code-review-hook/internal/config"
@@ -31,6 +33,15 @@ func RepoRoot() (string, error) {
 	out, err := runGit(".", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("not inside a git repository: %w", err)
+	}
+	return out, nil
+}
+
+// CurrentBranch returns the current git branch name. Returns "HEAD" on detached HEAD.
+func CurrentBranch(repoRoot string) (string, error) {
+	out, err := runGit(repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("getting current branch: %w", err)
 	}
 	return out, nil
 }
@@ -152,4 +163,73 @@ func extractFilename(diffLine string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+// Hunk represents one parsed diff hunk for a single file.
+type Hunk struct {
+	File     string
+	OldStart int
+	OldLen   int
+	NewStart int
+	NewLen   int
+	Body     string
+}
+
+var hunkHeaderRE = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// Hunks parses a unified diff into hunks. Returns nil on empty input.
+func Hunks(diff string) []Hunk {
+	if strings.TrimSpace(diff) == "" {
+		return nil
+	}
+
+	var hunks []Hunk
+	var currentFile string
+	var currentHunk *Hunk
+	var body []string
+
+	flush := func() {
+		if currentHunk != nil {
+			currentHunk.Body = strings.Join(body, "\n")
+			hunks = append(hunks, *currentHunk)
+		}
+		currentHunk = nil
+		body = nil
+	}
+
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git") {
+			flush()
+			currentFile = extractFilename(line)
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			flush()
+			m := hunkHeaderRE.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			h := Hunk{File: currentFile}
+			h.OldStart, _ = strconv.Atoi(m[1])
+			if m[2] != "" {
+				h.OldLen, _ = strconv.Atoi(m[2])
+			} else {
+				h.OldLen = 1
+			}
+			h.NewStart, _ = strconv.Atoi(m[3])
+			if m[4] != "" {
+				h.NewLen, _ = strconv.Atoi(m[4])
+			} else {
+				h.NewLen = 1
+			}
+			currentHunk = &h
+			body = []string{line}
+			continue
+		}
+		if currentHunk != nil {
+			body = append(body, line)
+		}
+	}
+	flush()
+	return hunks
 }
