@@ -1,0 +1,8 @@
+repos:
+  - repo: https://github.com/AbinavACV/code-review-hook
+    rev: v0.2.0
+    hooks:
+      - id: ai-code-review
+        args:
+          - --base-url=https://llm-gateway.internal.internal-development.acvauctions.com/openai/v1
+          - --model=EXTERNAL:google/gemini-2.5-pro
