@@ -26,6 +26,32 @@ type OpenAIChatClient struct {
 	model  string
 }
 
+// reviewResultSchema is the JSON Schema sent to gateways that require
+// response_format=json_schema (e.g. internal LLM gateway). Mirrors ReviewResult.
+var reviewResultSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"verdict", "summary", "issues"},
+	"properties": map[string]any{
+		"verdict": map[string]any{"type": "string", "enum": []string{"approve", "request_changes"}},
+		"summary": map[string]any{"type": "string"},
+		"issues": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"severity", "file", "line", "message"},
+				"properties": map[string]any{
+					"severity": map[string]any{"type": "string", "enum": []string{"error", "warning", "info"}},
+					"file":     map[string]any{"type": "string"},
+					"line":     map[string]any{"type": "integer"},
+					"message":  map[string]any{"type": "string"},
+				},
+			},
+		},
+	},
+}
+
 // Complete sends a chat completion request and returns the response content.
 func (c *OpenAIChatClient) Complete(ctx context.Context, systemMsg, userMsg string) (string, error) {
 	resp, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
@@ -35,7 +61,13 @@ func (c *OpenAIChatClient) Complete(ctx context.Context, systemMsg, userMsg stri
 			openai.UserMessage(userMsg),
 		},
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &openai.ResponseFormatJSONObjectParam{},
+			OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
+				JSONSchema: openai.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:   "review_result",
+					Strict: openai.Bool(true),
+					Schema: reviewResultSchema,
+				},
+			},
 		},
 	})
 	if err != nil {
