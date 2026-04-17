@@ -19,7 +19,7 @@ Add to your repo's `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/AbinavACV/code-review-hook
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: ai-code-review
 ```
@@ -46,7 +46,7 @@ Best for simple per-repo settings. No extra files to commit.
 ```yaml
 repos:
   - repo: https://github.com/AbinavACV/code-review-hook
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: ai-code-review
         args:
@@ -96,6 +96,8 @@ Copy `.code-review-hook.yaml.example` from this repo as a starting point.
 | `file_exclude_patterns` | []string | `["*.lock", "go.sum", "*.pb.go", "vendor/**"]` | — | Glob patterns for files to skip |
 | `rules_file` | string | `""` | `--rules-file` | Path to a markdown file with team review rules (relative to repo root) |
 | `custom_prompt` | string | `""` | — | Extra instructions appended to the system prompt (after rules) |
+| `save_comments` | bool | `true` | `--save-comments` | Write the latest review to `<comments_dir>/<branch>.md` |
+| `comments_dir` | string | `"comments"` | `--comments-dir` | Directory for review comment files (relative to repo root) |
 
 ### Precedence
 
@@ -144,6 +146,31 @@ The file content is injected into the AI's system prompt as a "Team rules" secti
 See `rules.md.example` in this repo for a Python-focused starting point you can adapt to your stack.
 
 If the rules file is missing, the hook warns and continues without rules (fail-open).
+
+---
+
+## Review Comments
+
+After every commit attempt — pass or fail — the hook writes the LLM review to `comments/<branch>.md` (overwriting any previous review for that branch). Each file contains:
+
+- The verdict and a one-line summary
+- One section per issue: severity, file:line, the LLM's message, and the relevant patch hunk extracted from the staged diff
+
+This gives you a persistent artifact to address while iterating on the change, even when the commit is allowed through.
+
+```yaml
+# .code-review-hook.yaml
+save_comments: true        # default
+comments_dir: comments     # default
+```
+
+To disable, set `save_comments: false` or pass `--save-comments=false`. To change the location, set `comments_dir` or pass `--comments-dir=.ai-reviews`.
+
+Branch names are sanitized for filesystem safety: `feature/login` becomes `feature-login.md`. On detached HEAD the file is written as `HEAD.md`.
+
+If you want these review files committed, leave `comments/` tracked. If they should stay local, add `comments/` to your `.gitignore` — the hook does not manage this for you.
+
+If the comments directory is unwritable, the hook logs a warning and the commit proceeds (fail-open).
 
 ---
 

@@ -24,6 +24,56 @@ func TestDefault(t *testing.T) {
 	if cfg.TimeoutSeconds <= 0 {
 		t.Error("timeout_seconds should be positive")
 	}
+	if !cfg.SaveComments {
+		t.Error("save_comments should default to true")
+	}
+	if cfg.CommentsDir != "comments" {
+		t.Errorf("comments_dir default: got %q want comments", cfg.CommentsDir)
+	}
+}
+
+func TestLoadCommentsOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	yaml := []byte("save_comments: false\ncomments_dir: .ai-reviews\n")
+	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
+
+	cfg, err := Load(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SaveComments {
+		t.Error("save_comments should be false from YAML")
+	}
+	if cfg.CommentsDir != ".ai-reviews" {
+		t.Errorf("comments_dir: got %q want .ai-reviews", cfg.CommentsDir)
+	}
+}
+
+func TestParseFlags_CommentsFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags, err := ParseFlags(fs, []string{"--save-comments=false", "--comments-dir=foo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flags.SaveComments == nil || *flags.SaveComments != false {
+		t.Error("expected SaveComments=false")
+	}
+	if flags.CommentsDir == nil || *flags.CommentsDir != "foo" {
+		t.Error("expected CommentsDir=foo")
+	}
+}
+
+func TestApplyFlags_Comments(t *testing.T) {
+	cfg := Default()
+	save := false
+	dir := "x"
+	ApplyFlags(&cfg, Flags{SaveComments: &save, CommentsDir: &dir})
+	if cfg.SaveComments {
+		t.Error("expected SaveComments=false after ApplyFlags")
+	}
+	if cfg.CommentsDir != "x" {
+		t.Errorf("expected CommentsDir=x, got %q", cfg.CommentsDir)
+	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
