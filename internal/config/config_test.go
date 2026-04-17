@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"flag"
@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
+func TestDefault(t *testing.T) {
+	cfg := Default()
 	if cfg.BaseURL == "" {
 		t.Error("base_url should have a default")
 	}
@@ -26,23 +26,23 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigMissingFile(t *testing.T) {
-	cfg, err := LoadConfig(t.TempDir())
+func TestLoadMissingFile(t *testing.T) {
+	cfg, err := Load(t.TempDir())
 	if err != nil {
 		t.Errorf("missing config file should not error: %v", err)
 	}
-	defaults := DefaultConfig()
+	defaults := Default()
 	if cfg.Model != defaults.Model {
 		t.Error("should use default model")
 	}
 }
 
-func TestLoadConfigOverrides(t *testing.T) {
+func TestLoadOverrides(t *testing.T) {
 	tmpDir := t.TempDir()
 	yaml := []byte("model: gpt-4o\nmax_diff_lines: 200\nbase_url: https://my-gateway.example.com/v1\n")
 	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
 
-	cfg, err := LoadConfig(tmpDir)
+	cfg, err := Load(tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -55,24 +55,24 @@ func TestLoadConfigOverrides(t *testing.T) {
 	if cfg.BaseURL != "https://my-gateway.example.com/v1" {
 		t.Errorf("expected custom base_url, got %s", cfg.BaseURL)
 	}
-	if cfg.TimeoutSeconds != DefaultConfig().TimeoutSeconds {
+	if cfg.TimeoutSeconds != Default().TimeoutSeconds {
 		t.Error("non-overridden field should remain default")
 	}
 }
 
 func TestValidate(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := Default()
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("default config should be valid: %v", err)
 	}
 
-	bad := DefaultConfig()
+	bad := Default()
 	bad.SeverityThreshold = "critical"
 	if err := bad.Validate(); err == nil {
 		t.Error("invalid severity_threshold should fail validation")
 	}
 
-	bad = DefaultConfig()
+	bad = Default()
 	bad.MaxDiffLines = 10
 	if err := bad.Validate(); err == nil {
 		t.Error("max_diff_lines below 50 should fail validation")
@@ -107,7 +107,7 @@ func TestFailOnWarningOverridesSeverity(t *testing.T) {
 	yaml := []byte("fail_on_warning: true\n")
 	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
 
-	cfg, err := LoadConfig(tmpDir)
+	cfg, err := Load(tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,14 +121,14 @@ func TestCLIFlagsOverrideYAML(t *testing.T) {
 	yaml := []byte("model: gpt-4o-mini\nseverity_threshold: error\n")
 	os.WriteFile(filepath.Join(tmpDir, ".code-review-hook.yaml"), yaml, 0644)
 
-	cfg, err := LoadConfig(tmpDir)
+	cfg, err := Load(tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	model := "gpt-4o"
 	severity := "warning"
-	ApplyCLIFlags(&cfg, CLIFlags{Model: &model, SeverityThreshold: &severity})
+	ApplyFlags(&cfg, Flags{Model: &model, SeverityThreshold: &severity})
 
 	if cfg.Model != "gpt-4o" {
 		t.Errorf("CLI --model not applied, got %s", cfg.Model)
@@ -138,18 +138,18 @@ func TestCLIFlagsOverrideYAML(t *testing.T) {
 	}
 }
 
-func TestApplyCLIFlags_NilFieldsUnchanged(t *testing.T) {
-	cfg := DefaultConfig()
+func TestApplyFlags_NilFieldsUnchanged(t *testing.T) {
+	cfg := Default()
 	original := cfg.Model
-	ApplyCLIFlags(&cfg, CLIFlags{}) // all nil
+	ApplyFlags(&cfg, Flags{})
 	if cfg.Model != original {
-		t.Error("nil CLIFlags should leave config unchanged")
+		t.Error("nil Flags should leave config unchanged")
 	}
 }
 
-func TestParseFlagSet_ExplicitFlags(t *testing.T) {
+func TestParseFlags_ExplicitFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	flags, err := ParseFlagSet(fs, []string{"--model=gpt-4o", "--severity-threshold=warning"})
+	flags, err := ParseFlags(fs, []string{"--model=gpt-4o", "--severity-threshold=warning"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,9 +164,9 @@ func TestParseFlagSet_ExplicitFlags(t *testing.T) {
 	}
 }
 
-func TestParseFlagSet_NoFlags(t *testing.T) {
+func TestParseFlags_NoFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	flags, err := ParseFlagSet(fs, []string{})
+	flags, err := ParseFlags(fs, []string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,65 +176,65 @@ func TestParseFlagSet_NoFlags(t *testing.T) {
 }
 
 func TestValidateTimeoutBounds(t *testing.T) {
-	tooLow := DefaultConfig()
+	tooLow := Default()
 	tooLow.TimeoutSeconds = 4
 	if err := tooLow.Validate(); err == nil {
 		t.Error("timeout_seconds below 5 should fail validation")
 	}
 
-	tooHigh := DefaultConfig()
+	tooHigh := Default()
 	tooHigh.TimeoutSeconds = 121
 	if err := tooHigh.Validate(); err == nil {
 		t.Error("timeout_seconds above 120 should fail validation")
 	}
 }
 
-func TestLoadRulesContent_FileExists(t *testing.T) {
+func TestLoadRules_FileExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	rules := "  Do not use eval().  \n"
 	os.WriteFile(filepath.Join(tmpDir, "rules.md"), []byte(rules), 0644)
 
-	cfg := DefaultConfig()
+	cfg := Default()
 	cfg.RulesFile = "rules.md"
-	LoadRulesContent(tmpDir, &cfg)
+	LoadRules(tmpDir, &cfg)
 	if cfg.RulesContent != "Do not use eval()." {
 		t.Errorf("expected trimmed content, got %q", cfg.RulesContent)
 	}
 }
 
-func TestLoadRulesContent_FileMissing(t *testing.T) {
-	cfg := DefaultConfig()
+func TestLoadRules_FileMissing(t *testing.T) {
+	cfg := Default()
 	cfg.RulesFile = "nonexistent.md"
-	LoadRulesContent(t.TempDir(), &cfg)
+	LoadRules(t.TempDir(), &cfg)
 	if cfg.RulesContent != "" {
 		t.Error("missing rules file should leave RulesContent empty")
 	}
 }
 
-func TestLoadRulesContent_EmptyFile(t *testing.T) {
+func TestLoadRules_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "rules.md"), []byte("   \n  "), 0644)
 
-	cfg := DefaultConfig()
+	cfg := Default()
 	cfg.RulesFile = "rules.md"
-	LoadRulesContent(tmpDir, &cfg)
+	LoadRules(tmpDir, &cfg)
 	if cfg.RulesContent != "" {
 		t.Error("empty/whitespace-only rules file should produce empty RulesContent")
 	}
 }
 
-func TestLoadRulesContent_NotSet(t *testing.T) {
-	cfg := DefaultConfig()
+func TestLoadRules_NotSet(t *testing.T) {
+	cfg := Default()
 	cfg.RulesContent = "should remain"
-	LoadRulesContent(t.TempDir(), &cfg)
+	LoadRules(t.TempDir(), &cfg)
 	if cfg.RulesContent != "should remain" {
-		t.Error("LoadRulesContent should no-op when RulesFile is empty")
+		t.Error("LoadRules should no-op when RulesFile is empty")
 	}
 }
 
-func TestParseFlagSet_RulesFile(t *testing.T) {
+func TestParseFlags_RulesFile(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	flags, err := ParseFlagSet(fs, []string{"--rules-file=rules.md"})
+	flags, err := ParseFlags(fs, []string{"--rules-file=rules.md"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -243,26 +243,24 @@ func TestParseFlagSet_RulesFile(t *testing.T) {
 	}
 }
 
-func TestApplyCLIFlags_RulesFile(t *testing.T) {
-	cfg := DefaultConfig()
+func TestApplyFlags_RulesFile(t *testing.T) {
+	cfg := Default()
 	rf := "custom-rules.md"
-	ApplyCLIFlags(&cfg, CLIFlags{RulesFile: &rf})
+	ApplyFlags(&cfg, Flags{RulesFile: &rf})
 	if cfg.RulesFile != "custom-rules.md" {
 		t.Errorf("expected RulesFile to be custom-rules.md, got %s", cfg.RulesFile)
 	}
 }
 
 func TestResolveAPIKey(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := Default()
 	cfg.APIKey = "from-config"
 
-	// Config fallback when no env var set.
 	os.Unsetenv("LLM_API_KEY")
 	if got := cfg.ResolveAPIKey(); got != "from-config" {
 		t.Errorf("expected from-config, got %s", got)
 	}
 
-	// LLM_API_KEY takes precedence over config file value.
 	os.Setenv("LLM_API_KEY", "from-llm")
 	defer os.Unsetenv("LLM_API_KEY")
 	if got := cfg.ResolveAPIKey(); got != "from-llm" {

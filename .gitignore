@@ -1,7 +1,8 @@
 plans/
 
-# compiled binary
+# compiled binaries
 /code-review-hook
+/bin/
 
 # test coverage output
 *.out

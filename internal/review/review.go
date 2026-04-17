@@ -1,4 +1,4 @@
-package main
+package review
 
 import (
 	"context"
@@ -9,6 +9,9 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+
+	"github.com/AbinavACV/code-review-hook/internal/config"
+	"github.com/AbinavACV/code-review-hook/internal/output"
 )
 
 // ChatClient is the interface for making LLM completions.
@@ -59,11 +62,11 @@ type Issue struct {
 // Reviewer orchestrates sending diffs to an LLM for code review.
 type Reviewer struct {
 	chat ChatClient
-	cfg  Config
+	cfg  config.Config
 }
 
 // NewReviewer creates a Reviewer using the provided config.
-func NewReviewer(cfg Config) (*Reviewer, error) {
+func NewReviewer(cfg config.Config) (*Reviewer, error) {
 	apiKey := cfg.ResolveAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("no API key found (set LLM_API_KEY, OPENAI_API_KEY, or api_key in config)")
@@ -84,7 +87,7 @@ func NewReviewer(cfg Config) (*Reviewer, error) {
 func (r *Reviewer) Review(ctx context.Context, diff string) (*ReviewResult, error) {
 	truncated, wasTruncated := truncateDiff(diff, r.cfg.MaxDiffLines)
 	if wasTruncated {
-		PrintWarning("Diff truncated to " + strconv.Itoa(r.cfg.MaxDiffLines) + " lines")
+		output.PrintWarning("Diff truncated to " + strconv.Itoa(r.cfg.MaxDiffLines) + " lines")
 	}
 
 	systemPrompt := buildSystemPrompt(r.cfg.RulesContent, r.cfg.CustomPrompt)

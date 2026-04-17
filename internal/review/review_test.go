@@ -1,10 +1,12 @@
-package main
+package review
 
 import (
 	"context"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/AbinavACV/code-review-hook/internal/config"
 )
 
 // mockChatClient implements ChatClient for testing.
@@ -22,7 +24,7 @@ func TestReview_Approve(t *testing.T) {
 		chat: &mockChatClient{
 			response: `{"verdict":"approve","summary":"Looks good","issues":[]}`,
 		},
-		cfg: DefaultConfig(),
+		cfg: config.Default(),
 	}
 	result, err := reviewer.Review(context.Background(), "+ some code")
 	if err != nil {
@@ -41,7 +43,7 @@ func TestReview_BlocksOnError(t *testing.T) {
 		chat: &mockChatClient{
 			response: `{"verdict":"request_changes","summary":"Bug found","issues":[{"severity":"error","file":"main.go","line":10,"message":"null pointer dereference"}]}`,
 		},
-		cfg: DefaultConfig(),
+		cfg: config.Default(),
 	}
 	result, err := reviewer.Review(context.Background(), "+ bad code")
 	if err != nil {
@@ -57,7 +59,7 @@ func TestReview_WarningDoesNotBlockByDefault(t *testing.T) {
 		chat: &mockChatClient{
 			response: `{"verdict":"request_changes","summary":"Style issue","issues":[{"severity":"warning","file":"main.go","line":5,"message":"consider renaming"}]}`,
 		},
-		cfg: DefaultConfig(), // severity_threshold = "error"
+		cfg: config.Default(),
 	}
 	result, err := reviewer.Review(context.Background(), "+ code")
 	if err != nil {
@@ -71,7 +73,7 @@ func TestReview_WarningDoesNotBlockByDefault(t *testing.T) {
 func TestReview_APIFailure(t *testing.T) {
 	reviewer := &Reviewer{
 		chat: &mockChatClient{err: fmt.Errorf("connection refused")},
-		cfg:  DefaultConfig(),
+		cfg:  config.Default(),
 	}
 	_, err := reviewer.Review(context.Background(), "+ code")
 	if err == nil {
@@ -82,7 +84,7 @@ func TestReview_APIFailure(t *testing.T) {
 func TestReview_MalformedResponse(t *testing.T) {
 	reviewer := &Reviewer{
 		chat: &mockChatClient{response: "not valid json {{{"},
-		cfg:  DefaultConfig(),
+		cfg:  config.Default(),
 	}
 	_, err := reviewer.Review(context.Background(), "+ code")
 	if err == nil {
@@ -95,7 +97,7 @@ func TestReview_InfoDoesNotBlockAtErrorThreshold(t *testing.T) {
 		chat: &mockChatClient{
 			response: `{"verdict":"request_changes","summary":"Style nit","issues":[{"severity":"info","file":"main.go","line":1,"message":"consider a comment"}]}`,
 		},
-		cfg: DefaultConfig(), // severity_threshold = "error"
+		cfg: config.Default(),
 	}
 	result, err := reviewer.Review(context.Background(), "+ code")
 	if err != nil {
@@ -107,7 +109,7 @@ func TestReview_InfoDoesNotBlockAtErrorThreshold(t *testing.T) {
 }
 
 func TestReview_BlocksAtWarningThreshold(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := config.Default()
 	cfg.SeverityThreshold = "warning"
 	reviewer := &Reviewer{
 		chat: &mockChatClient{
@@ -209,20 +211,7 @@ func TestTruncateDiff(t *testing.T) {
 	if !truncated {
 		t.Error("long diff should be truncated")
 	}
-	if !containsString(result, "truncated") {
+	if !strings.Contains(result, "truncated") {
 		t.Error("truncated diff should contain truncation notice")
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
-}
-
-func containsSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

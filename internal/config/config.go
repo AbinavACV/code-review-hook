@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"flag"
@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/AbinavACV/code-review-hook/internal/output"
 )
 
 // Config holds all configuration for the code review hook.
@@ -25,12 +27,12 @@ type Config struct {
 	TimeoutSeconds      int      `yaml:"timeout_seconds"`
 }
 
-// DefaultConfig returns a Config with sensible defaults.
-func DefaultConfig() Config {
+// Default returns a Config with sensible defaults.
+func Default() Config {
 	return Config{
-		BaseURL:          "https://api.openai.com/v1",
-		Model:            "gpt-4o-mini",
-		MaxDiffLines:     500,
+		BaseURL:           "https://api.openai.com/v1",
+		Model:             "gpt-4o-mini",
+		MaxDiffLines:      500,
 		SeverityThreshold: "error",
 		FileExcludePatterns: []string{
 			"*.lock",
@@ -42,9 +44,9 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadConfig reads .code-review-hook.yaml from repoRoot and overlays onto defaults.
-func LoadConfig(repoRoot string) (Config, error) {
-	cfg := DefaultConfig()
+// Load reads .code-review-hook.yaml from repoRoot and overlays onto defaults.
+func Load(repoRoot string) (Config, error) {
+	cfg := Default()
 
 	path := filepath.Join(repoRoot, ".code-review-hook.yaml")
 	data, err := os.ReadFile(path)
@@ -64,7 +66,6 @@ func LoadConfig(repoRoot string) (Config, error) {
 	return cfg, nil
 }
 
-// applyFailOnWarning overrides severity_threshold when fail_on_warning is set.
 func applyFailOnWarning(cfg *Config) {
 	if cfg.FailOnWarning {
 		cfg.SeverityThreshold = "warning"
@@ -79,9 +80,9 @@ func (c Config) ResolveAPIKey() string {
 	return c.APIKey
 }
 
-// CLIFlags holds values parsed from os.Args.
+// Flags holds values parsed from os.Args.
 // Pointer fields distinguish "explicitly set" from "not provided".
-type CLIFlags struct {
+type Flags struct {
 	Model             *string
 	SeverityThreshold *string
 	TimeoutSeconds    *int
@@ -91,9 +92,9 @@ type CLIFlags struct {
 	RulesFile         *string
 }
 
-// ParseFlagSet parses args using fs and returns only the flags that were
+// ParseFlags parses args using fs and returns only the flags that were
 // explicitly set. Use flag.NewFlagSet for testability.
-func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
+func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 	model := fs.String("model", "", "LLM model name")
 	severity := fs.String("severity-threshold", "", "Minimum severity to block: error, warning, or info")
 	timeout := fs.Int("timeout", 0, "API timeout in seconds (5–120)")
@@ -103,10 +104,10 @@ func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
 	rulesFile := fs.String("rules-file", "", "Path to a markdown file with team code review rules (relative to repo root)")
 
 	if err := fs.Parse(args); err != nil {
-		return CLIFlags{}, err
+		return Flags{}, err
 	}
 
-	var flags CLIFlags
+	var flags Flags
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "model":
@@ -128,9 +129,9 @@ func ParseFlagSet(fs *flag.FlagSet, args []string) (CLIFlags, error) {
 	return flags, nil
 }
 
-// ApplyCLIFlags overlays explicitly-set CLI flags onto cfg.
+// ApplyFlags overlays explicitly-set CLI flags onto cfg.
 // Only non-nil pointer fields are applied.
-func ApplyCLIFlags(cfg *Config, flags CLIFlags) {
+func ApplyFlags(cfg *Config, flags Flags) {
 	if flags.Model != nil {
 		cfg.Model = *flags.Model
 	}
@@ -152,7 +153,6 @@ func ApplyCLIFlags(cfg *Config, flags CLIFlags) {
 	if flags.RulesFile != nil {
 		cfg.RulesFile = *flags.RulesFile
 	}
-	// Re-apply fail_on_warning logic after overlay.
 	applyFailOnWarning(cfg)
 }
 
@@ -171,21 +171,21 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// LoadRulesContent reads the rules file specified by cfg.RulesFile (relative to repoRoot)
+// LoadRules reads the rules file specified by cfg.RulesFile (relative to repoRoot)
 // and stores the trimmed content in cfg.RulesContent. Warns and continues if the file
 // is missing or unreadable (fail-open).
-func LoadRulesContent(repoRoot string, cfg *Config) {
+func LoadRules(repoRoot string, cfg *Config) {
 	if cfg.RulesFile == "" {
 		return
 	}
 	path := filepath.Join(repoRoot, cfg.RulesFile)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		PrintWarning("rules_file not found: " + path)
+		output.PrintWarning("rules_file not found: " + path)
 		return
 	}
 	if err != nil {
-		PrintWarning("Could not read rules_file: " + err.Error())
+		output.PrintWarning("Could not read rules_file: " + err.Error())
 		return
 	}
 	cfg.RulesContent = strings.TrimSpace(string(data))
@@ -196,7 +196,6 @@ func LoadRulesContent(repoRoot string, cfg *Config) {
 func ShouldExcludeFile(path string, patterns []string) bool {
 	baseName := filepath.Base(path)
 	for _, pattern := range patterns {
-		// Handle ** patterns as prefix matching (e.g., "vendor/**" matches "vendor/lib.go")
 		if strings.Contains(pattern, "**") {
 			prefix := strings.SplitN(pattern, "**", 2)[0]
 			if strings.HasPrefix(path, prefix) {

@@ -1,16 +1,17 @@
-package main
+package diff
 
 import (
 	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/AbinavACV/code-review-hook/internal/config"
 )
 
 // emptyTreeSHA is the well-known SHA for an empty git tree.
 const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// runGit executes a git command and returns its stdout.
 func runGit(repoRoot string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoRoot
@@ -25,8 +26,8 @@ func runGit(repoRoot string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// GetRepoRoot returns the top-level directory of the git repository.
-func GetRepoRoot() (string, error) {
+// RepoRoot returns the top-level directory of the git repository.
+func RepoRoot() (string, error) {
 	out, err := runGit(".", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("not inside a git repository: %w", err)
@@ -41,22 +42,22 @@ func IsFirstCommit(repoRoot string) bool {
 	return cmd.Run() != nil
 }
 
-// HasStagedChanges returns true if there are staged changes.
-func HasStagedChanges(repoRoot string) (bool, error) {
+// HasStaged returns true if there are staged changes.
+func HasStaged(repoRoot string) (bool, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--quiet")
 	cmd.Dir = repoRoot
 	err := cmd.Run()
 	if err == nil {
-		return false, nil // exit 0 = no differences
+		return false, nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		return true, nil // exit 1 = differences exist
+		return true, nil
 	}
 	return false, fmt.Errorf("checking staged changes: %w", err)
 }
 
-// GetStagedDiff returns the unified diff of all staged changes.
-func GetStagedDiff(repoRoot string) (string, error) {
+// Staged returns the unified diff of all staged changes.
+func Staged(repoRoot string) (string, error) {
 	base := "HEAD"
 	if IsFirstCommit(repoRoot) {
 		base = emptyTreeSHA
@@ -69,8 +70,8 @@ func GetStagedDiff(repoRoot string) (string, error) {
 	return diff, nil
 }
 
-// GetStagedFileNames returns the list of staged file names.
-func GetStagedFileNames(repoRoot string) ([]string, error) {
+// StagedFiles returns the list of staged file names.
+func StagedFiles(repoRoot string) ([]string, error) {
 	base := "HEAD"
 	if IsFirstCommit(repoRoot) {
 		base = emptyTreeSHA
@@ -131,9 +132,8 @@ func FilterExcludedFiles(diff string, patterns []string) string {
 				result = append(result, currentHunk...)
 			}
 			currentHunk = []string{line}
-			// Extract filename from "diff --git a/path b/path"
 			filename := extractFilename(line)
-			excluded = ShouldExcludeFile(filename, patterns)
+			excluded = config.ShouldExcludeFile(filename, patterns)
 		} else {
 			currentHunk = append(currentHunk, line)
 		}
@@ -147,7 +147,6 @@ func FilterExcludedFiles(diff string, patterns []string) string {
 
 // extractFilename extracts the destination filename from a "diff --git a/... b/..." line.
 func extractFilename(diffLine string) string {
-	// Format: "diff --git a/path b/path"
 	parts := strings.SplitN(diffLine, " b/", 2)
 	if len(parts) == 2 {
 		return parts[1]
