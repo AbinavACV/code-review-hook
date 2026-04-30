@@ -27,6 +27,13 @@ type Config struct {
 	TimeoutSeconds      int      `yaml:"timeout_seconds"`
 	SaveComments        bool     `yaml:"save_comments"`
 	CommentsDir         string   `yaml:"comments_dir"`
+
+	RepoContextEnabled    bool   `yaml:"repo_context_enabled"`
+	RepoContextMaxFiles   int    `yaml:"repo_context_max_files"`
+	RepoContextMaxTokens  int    `yaml:"repo_context_max_tokens"`
+	SummarizerEnabled     bool   `yaml:"summarizer_enabled"`
+	SummarizerModel       string `yaml:"summarizer_model"`
+	SummarizerConcurrency int    `yaml:"summarizer_concurrency"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -45,6 +52,13 @@ func Default() Config {
 		TimeoutSeconds: 30,
 		SaveComments:   true,
 		CommentsDir:    "comments",
+
+		RepoContextEnabled:    true,
+		RepoContextMaxFiles:   50,
+		RepoContextMaxTokens:  8000,
+		SummarizerEnabled:     true,
+		SummarizerModel:       "gpt-4o-mini",
+		SummarizerConcurrency: 8,
 	}
 }
 
@@ -96,6 +110,12 @@ type Flags struct {
 	RulesFile         *string
 	SaveComments      *bool
 	CommentsDir       *string
+
+	RepoContextEnabled   *bool
+	RepoContextMaxFiles  *int
+	RepoContextMaxTokens *int
+	SummarizerEnabled    *bool
+	SummarizerModel      *string
 }
 
 // ParseFlags parses args using fs and returns only the flags that were
@@ -110,6 +130,11 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 	rulesFile := fs.String("rules-file", "", "Path to a markdown file with team code review rules (relative to repo root)")
 	saveComments := fs.Bool("save-comments", true, "Save review comments to a markdown file under <comments-dir>/<branch>.md")
 	commentsDir := fs.String("comments-dir", "", "Directory for review comment files (relative to repo root)")
+	repoCtx := fs.Bool("repo-context", true, "Include a compressed whole-repo skeleton in the review prompt")
+	repoCtxMaxFiles := fs.Int("repo-context-max-files", 0, "Cap on files included in the repo skeleton (>=1)")
+	repoCtxMaxTokens := fs.Int("repo-context-max-tokens", 0, "Cap on tokens used by the repo skeleton (>=500)")
+	summarize := fs.Bool("summarize-hunks", true, "Run a cheap-model summarizer on each hunk in parallel before review")
+	summarizerModel := fs.String("summarizer-model", "", "LLM model used for parallel hunk summarization")
 
 	if err := fs.Parse(args); err != nil {
 		return Flags{}, err
@@ -136,6 +161,16 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 			flags.SaveComments = saveComments
 		case "comments-dir":
 			flags.CommentsDir = commentsDir
+		case "repo-context":
+			flags.RepoContextEnabled = repoCtx
+		case "repo-context-max-files":
+			flags.RepoContextMaxFiles = repoCtxMaxFiles
+		case "repo-context-max-tokens":
+			flags.RepoContextMaxTokens = repoCtxMaxTokens
+		case "summarize-hunks":
+			flags.SummarizerEnabled = summarize
+		case "summarizer-model":
+			flags.SummarizerModel = summarizerModel
 		}
 	})
 	return flags, nil
@@ -171,6 +206,21 @@ func ApplyFlags(cfg *Config, flags Flags) {
 	if flags.CommentsDir != nil {
 		cfg.CommentsDir = *flags.CommentsDir
 	}
+	if flags.RepoContextEnabled != nil {
+		cfg.RepoContextEnabled = *flags.RepoContextEnabled
+	}
+	if flags.RepoContextMaxFiles != nil {
+		cfg.RepoContextMaxFiles = *flags.RepoContextMaxFiles
+	}
+	if flags.RepoContextMaxTokens != nil {
+		cfg.RepoContextMaxTokens = *flags.RepoContextMaxTokens
+	}
+	if flags.SummarizerEnabled != nil {
+		cfg.SummarizerEnabled = *flags.SummarizerEnabled
+	}
+	if flags.SummarizerModel != nil {
+		cfg.SummarizerModel = *flags.SummarizerModel
+	}
 	applyFailOnWarning(cfg)
 }
 
@@ -185,6 +235,18 @@ func (c Config) Validate() error {
 	}
 	if c.TimeoutSeconds < 5 || c.TimeoutSeconds > 120 {
 		return fmt.Errorf("timeout_seconds must be between 5 and 120")
+	}
+	if c.RepoContextEnabled && c.RepoContextMaxFiles < 1 {
+		return fmt.Errorf("repo_context_max_files must be at least 1 when repo_context_enabled is true")
+	}
+	if c.RepoContextEnabled && c.RepoContextMaxTokens < 500 {
+		return fmt.Errorf("repo_context_max_tokens must be at least 500 when repo_context_enabled is true")
+	}
+	if c.SummarizerEnabled && c.SummarizerModel == "" {
+		return fmt.Errorf("summarizer_model must be set when summarizer_enabled is true")
+	}
+	if c.SummarizerEnabled && (c.SummarizerConcurrency < 1 || c.SummarizerConcurrency > 32) {
+		return fmt.Errorf("summarizer_concurrency must be between 1 and 32")
 	}
 	return nil
 }

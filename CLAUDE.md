@@ -23,7 +23,7 @@ Manual end-to-end run (bypasses pre-commit framework, requires staged changes + 
 ./bin/code-review-hook --base-url=<url> --model=<model>
 ```
 
-Go 1.25+ required (see `go.mod`). Single external runtime dep: `github.com/openai/openai-go/v3`.
+Go 1.25+ required (see `go.mod`). External runtime deps: `github.com/openai/openai-go/v3`, `github.com/tree-sitter/go-tree-sitter` (CGo) and the per-language grammars `tree-sitter-{go,python,javascript,typescript,rust}`. Build requires a C toolchain because of tree-sitter.
 
 ## Architecture
 
@@ -38,10 +38,16 @@ Pipeline (`main.go` top-to-bottom):
 5. `config.LoadRules` → read `rules_file` into `cfg.RulesContent` (fail-open warn).
 6. `cfg.Validate` → invalid config = exit 1 (one of two non-fail-open exits, the other is missing API key).
 7. `diff.HasStaged` → `git diff --cached --quiet`.
-8. `diff.Staged` → `git diff --cached`, then `StripBinaryHunks` and `FilterExcludedFiles` (glob match against `cfg.FileExcludePatterns`).
+8. `diff.Staged` → `git diff --cached`, then `StripBinaryHunks`, `FilterExcludedFiles` (glob match against `cfg.FileExcludePatterns`), and `compressdiff.StripNoise` (drops `index ...`, mode-change, similarity, rename-from/to lines).
+8a. `diff.Hunks(stagedDiff)` → `compressdiff.CollapseDuplicates` clusters identical-shape hunks across files; runs of size ≥2 collapse to one representative + a summary line ("Identical edit appears in N locations: ...").
+8b. If `cfg.RepoContextEnabled`, `buildRepoContext` (in `main.go`) calls `repocontext.DetectSymbols` on changed files → `repocontext.ReferencingFiles` (whole-word grep across repo) → `repocontext.Build` skeletons → `repocontext.Assemble` truncates to `cfg.RepoContextMaxTokens`. All failures fail-open (warn + empty context).
 9. `cfg.ResolveAPIKey` → `LLM_API_KEY` env var > `cfg.APIKey`. Empty = exit 1.
-10. `review.NewReviewer(cfg)` → builds `OpenAIChatClient` (openai-go SDK pointed at `cfg.BaseURL`).
-11. `reviewer.Review(ctx, diff)` → system prompt = base + team rules (`RulesContent`) + `CustomPrompt`; sends diff as user message with `ResponseFormat: JSONObject`; parses into `ReviewResult{Verdict, Summary, Issues[]}`.
+10. `review.NewReviewer(cfg)` → builds `OpenAIChatClient` for the reviewer model + a `plainChatClient` for `cfg.SummarizerModel` (when `cfg.SummarizerEnabled`).
+11. `reviewer.Review(ctx, ReviewInput{Hunks, CollapseSummaries, RepoContext})`:
+    - `summarizeHunks` fans out per-hunk summarization in parallel (concurrency=`cfg.SummarizerConcurrency`); failures degrade gracefully (empty summary).
+    - `buildSystemPrompt(rulesContent, customPrompt, repoContext)` injects the repo skeleton as `## Repository context (signatures only)` before team rules.
+    - `buildUserMessage` interleaves `[SUMMARY: ...]` lines above each hunk and appends a `## Cross-file collapsed edits` section.
+    - Sends with `ResponseFormat: JSONSchema` (strict); parses into `ReviewResult{Verdict, Summary, Issues[]}`.
 12. `displayResults` → colored stderr output via `internal/output`.
 13. If `cfg.SaveComments`, `comments.Write(repoRoot, cfg.CommentsDir, branch, result, hunks)` writes `<commentsDir>/<sanitized-branch>.md` (overwrites). Branch from `diff.CurrentBranch`; sanitized via `comments.SanitizeBranch` (`feature/x` → `feature-x`, detached HEAD → `HEAD`).
 14. `reviewer.ShouldBlock(result)` checks issue severities against `cfg.SeverityThreshold` → exit 1 (block) or 0 (allow).
@@ -61,6 +67,9 @@ Substantive blocks come from `ShouldBlock(result)` when the LLM reports issues a
 - `internal/review` defines the `ChatClient` interface so tests inject mocks; `OpenAIChatClient` is the production impl. `Reviewer.Review` builds the prompt and parses the structured JSON. `ShouldBlock` compares issue severity to `cfg.SeverityThreshold`.
 - `internal/comments` handles markdown serialization and branch-name sanitization. Independent of LLM/API concerns.
 - `internal/output` is the only package that writes to stderr (colored), gated by `golang.org/x/term` for TTY detection.
+- `internal/compressdiff` shrinks the diff before review: `StripNoise` (lossless drop of git metadata) and `CollapseDuplicates` (clusters identical-shape hunks across files). Hash-based — file paths and absolute line numbers are ignored when keying.
+- `internal/repocontext` builds the diff-relative repo skeleton via tree-sitter. `langs` map in `extractors.go` lists supported extensions (Go, Python, JS, TS, TSX, Rust); each language has a `skeletonQ` (extracts signatures) and `symbolQ` (extracts top-level names) tree-sitter query. To add a language, add a grammar dep and a `langs[".ext"]` entry. `signatureFor` strips bodies via the tree-sitter `body:` field with a fallback for nodes whose children include `block` / `statement_block` / `declaration_list` / `field_declaration_list`.
+- `internal/tokens` is a dependency-free token-count estimator (`max(chars/4, word_count)`). Used for budget gating only — not exact.
 
 ### Severity ordering
 

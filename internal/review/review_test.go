@@ -4,19 +4,37 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/AbinavACV/code-review-hook/internal/config"
+	"github.com/AbinavACV/code-review-hook/internal/diff"
 )
 
 // mockChatClient implements ChatClient for testing.
 type mockChatClient struct {
-	response string
-	err      error
+	response  string
+	err       error
+	calls     atomic.Int32
+	lastSys   string
+	lastUser  string
+	respondFn func(systemMsg, userMsg string) (string, error) // optional override
 }
 
 func (m *mockChatClient) Complete(ctx context.Context, systemMsg, userMsg string) (string, error) {
+	m.calls.Add(1)
+	m.lastSys = systemMsg
+	m.lastUser = userMsg
+	if m.respondFn != nil {
+		return m.respondFn(systemMsg, userMsg)
+	}
 	return m.response, m.err
+}
+
+func sampleHunks() []diff.Hunk {
+	return []diff.Hunk{
+		{File: "main.go", Body: "@@ -1,1 +1,1 @@\n-old\n+new\n", NewStart: 1},
+	}
 }
 
 func TestReview_Approve(t *testing.T) {
@@ -26,7 +44,7 @@ func TestReview_Approve(t *testing.T) {
 		},
 		cfg: config.Default(),
 	}
-	result, err := reviewer.Review(context.Background(), "+ some code")
+	result, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,7 +63,7 @@ func TestReview_BlocksOnError(t *testing.T) {
 		},
 		cfg: config.Default(),
 	}
-	result, err := reviewer.Review(context.Background(), "+ bad code")
+	result, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +79,7 @@ func TestReview_WarningDoesNotBlockByDefault(t *testing.T) {
 		},
 		cfg: config.Default(),
 	}
-	result, err := reviewer.Review(context.Background(), "+ code")
+	result, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +93,7 @@ func TestReview_APIFailure(t *testing.T) {
 		chat: &mockChatClient{err: fmt.Errorf("connection refused")},
 		cfg:  config.Default(),
 	}
-	_, err := reviewer.Review(context.Background(), "+ code")
+	_, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err == nil {
 		t.Error("expected error from API failure")
 	}
@@ -86,7 +104,7 @@ func TestReview_MalformedResponse(t *testing.T) {
 		chat: &mockChatClient{response: "not valid json {{{"},
 		cfg:  config.Default(),
 	}
-	_, err := reviewer.Review(context.Background(), "+ code")
+	_, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err == nil {
 		t.Error("expected error from malformed JSON response")
 	}
@@ -99,7 +117,7 @@ func TestReview_InfoDoesNotBlockAtErrorThreshold(t *testing.T) {
 		},
 		cfg: config.Default(),
 	}
-	result, err := reviewer.Review(context.Background(), "+ code")
+	result, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,7 +135,7 @@ func TestReview_BlocksAtWarningThreshold(t *testing.T) {
 		},
 		cfg: cfg,
 	}
-	result, err := reviewer.Review(context.Background(), "+ code")
+	result, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,8 +144,89 @@ func TestReview_BlocksAtWarningThreshold(t *testing.T) {
 	}
 }
 
+func TestReview_SummarizerFanOut(t *testing.T) {
+	cfg := config.Default()
+	cfg.SummarizerConcurrency = 4
+	summ := &mockChatClient{
+		respondFn: func(_, user string) (string, error) {
+			return "summary for: " + strings.Split(user, "\n")[0], nil
+		},
+	}
+	main := &mockChatClient{
+		response: `{"verdict":"approve","summary":"ok","issues":[]}`,
+	}
+	reviewer := &Reviewer{chat: main, summarizer: summ, cfg: cfg}
+
+	hunks := []diff.Hunk{
+		{File: "a.go", Body: "@@ -1,1 +1,1 @@\n-x\n+y\n"},
+		{File: "b.go", Body: "@@ -2,1 +2,1 @@\n-p\n+q\n"},
+		{File: "c.go", Body: "@@ -3,1 +3,1 @@\n-m\n+n\n"},
+	}
+	_, err := reviewer.Review(context.Background(), ReviewInput{Hunks: hunks})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := summ.calls.Load(); got != 3 {
+		t.Errorf("expected 3 summarizer calls, got %d", got)
+	}
+	for _, want := range []string{"a.go", "b.go", "c.go", "[SUMMARY:"} {
+		if !strings.Contains(main.lastUser, want) {
+			t.Errorf("reviewer user message missing %q\n%s", want, main.lastUser)
+		}
+	}
+}
+
+func TestReview_NoSummarizer(t *testing.T) {
+	main := &mockChatClient{response: `{"verdict":"approve","summary":"ok","issues":[]}`}
+	reviewer := &Reviewer{chat: main, summarizer: nil, cfg: config.Default()}
+	_, err := reviewer.Review(context.Background(), ReviewInput{Hunks: sampleHunks()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Boilerplate mentions [SUMMARY: ...] as instruction; check no actual
+	// summary lines appear by counting opening brackets.
+	if strings.Count(main.lastUser, "[SUMMARY:") > 1 {
+		t.Errorf("no summarizer = no per-hunk SUMMARY entries expected\n%s", main.lastUser)
+	}
+}
+
+func TestReview_RepoContextInSystemPrompt(t *testing.T) {
+	main := &mockChatClient{response: `{"verdict":"approve","summary":"ok","issues":[]}`}
+	reviewer := &Reviewer{chat: main, cfg: config.Default()}
+	_, err := reviewer.Review(context.Background(), ReviewInput{
+		Hunks:       sampleHunks(),
+		RepoContext: "// foo.go (go)\nfunc Bar() error",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"Repository context", "func Bar() error"} {
+		if !strings.Contains(main.lastSys, want) {
+			t.Errorf("system prompt missing %q\n%s", want, main.lastSys)
+		}
+	}
+}
+
+func TestReview_CollapseSummariesAppended(t *testing.T) {
+	main := &mockChatClient{response: `{"verdict":"approve","summary":"ok","issues":[]}`}
+	reviewer := &Reviewer{chat: main, cfg: config.Default()}
+	_, err := reviewer.Review(context.Background(), ReviewInput{
+		Hunks:             sampleHunks(),
+		CollapseSummaries: []string{"Identical edit appears in 5 locations: a.go, b.go, c.go, d.go, e.go"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(main.lastUser, "Cross-file collapsed edits") {
+		t.Errorf("collapse summaries section missing\n%s", main.lastUser)
+	}
+	if !strings.Contains(main.lastUser, "5 locations") {
+		t.Errorf("collapse summary content missing\n%s", main.lastUser)
+	}
+}
+
 func TestBuildSystemPrompt_WithCustomPrompt(t *testing.T) {
-	prompt := buildSystemPrompt("", "Focus on security only.")
+	prompt := buildSystemPrompt("", "Focus on security only.", "")
 	if !strings.Contains(prompt, "Focus on security only.") {
 		t.Error("custom prompt should be appended to system prompt")
 	}
@@ -137,30 +236,30 @@ func TestBuildSystemPrompt_WithCustomPrompt(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_NoCustomPrompt(t *testing.T) {
-	prompt := buildSystemPrompt("", "")
+	prompt := buildSystemPrompt("", "", "")
 	if strings.Contains(prompt, "Additional instructions") {
 		t.Error("should not include 'Additional instructions' when no custom prompt")
 	}
 	if strings.Contains(prompt, "Team rules") {
 		t.Error("should not include 'Team rules' when no rules content")
 	}
+	if strings.Contains(prompt, "Repository context") {
+		t.Error("should not include 'Repository context' when none provided")
+	}
 }
 
 func TestBuildSystemPrompt_WithRulesContent(t *testing.T) {
-	prompt := buildSystemPrompt("Do not use eval().", "")
+	prompt := buildSystemPrompt("Do not use eval().", "", "")
 	if !strings.Contains(prompt, "Team rules:") {
 		t.Error("should include 'Team rules:' section header")
 	}
 	if !strings.Contains(prompt, "Do not use eval().") {
 		t.Error("rules content should appear in prompt")
 	}
-	if strings.Contains(prompt, "Additional instructions") {
-		t.Error("should not include 'Additional instructions' when no custom prompt")
-	}
 }
 
 func TestBuildSystemPrompt_RulesBeforeCustom(t *testing.T) {
-	prompt := buildSystemPrompt("Rule: no eval", "Extra: be strict")
+	prompt := buildSystemPrompt("Rule: no eval", "Extra: be strict", "")
 	rulesIdx := strings.Index(prompt, "Team rules:")
 	customIdx := strings.Index(prompt, "Additional instructions:")
 	if rulesIdx == -1 || customIdx == -1 {
@@ -168,6 +267,18 @@ func TestBuildSystemPrompt_RulesBeforeCustom(t *testing.T) {
 	}
 	if rulesIdx >= customIdx {
 		t.Error("Team rules should appear before Additional instructions")
+	}
+}
+
+func TestBuildSystemPrompt_RepoContextBeforeRules(t *testing.T) {
+	prompt := buildSystemPrompt("Rule: no eval", "", "// skel.go (go)")
+	ctxIdx := strings.Index(prompt, "Repository context")
+	rulesIdx := strings.Index(prompt, "Team rules:")
+	if ctxIdx == -1 || rulesIdx == -1 {
+		t.Fatal("both sections should be present")
+	}
+	if ctxIdx >= rulesIdx {
+		t.Error("Repository context should appear before Team rules")
 	}
 }
 
