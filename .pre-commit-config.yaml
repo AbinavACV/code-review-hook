@@ -4,5 +4,5 @@ repos:
     hooks:
       - id: ai-code-review
         args:
-          - --base-url=https://llm-gateway.internal.internal-development.acvauctions.com/openai/v1
+          - --base-url=https://gemini.googleapis.com/v1
           - --model=EXTERNAL:google/gemini-2.5-pro

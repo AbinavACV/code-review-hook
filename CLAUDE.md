@@ -75,6 +75,32 @@ Substantive blocks come from `ShouldBlock(result)` when the LLM reports issues a
 
 `info < warning < error`. `--fail-on-warning` is sugar for `--severity-threshold=warning`. When adding a new severity, update `ShouldBlock`, the validator in `config.Validate`, and the LLM system prompt that enumerates allowed values.
 
+## Local testing against a sibling repo
+
+Point a test repo's `.pre-commit-config.yaml` at the local checkout instead of GitHub:
+
+```yaml
+repos:
+  - repo: /absolute/path/to/code-review-hook
+    rev: HEAD
+    hooks:
+      - id: ai-code-review
+```
+
+Then `pre-commit install && git commit` in that repo. Slower than the direct binary invocation above but exercises the full pre-commit integration.
+
+## CGo note
+
+`CGO_ENABLED=0` builds will fail — `tree-sitter` requires CGo. Ensure Xcode Command Line Tools (macOS) or `build-essential` (Linux) are present before `make build`.
+
+## Release checklist
+
+1. Bump `rev:` pin in `README.md` Quick Start and Option 1 examples, commit to `main`.
+2. `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`
+3. Tags must not move — `pre-commit` consumers pin to them.
+
+Patch = bug/prompt fix (no flag changes). Minor = new flags/YAML/defaults. Major = removed flags, changed exit semantics, or breaking fail-open.
+
 ## Conventions
 
 - All flag/YAML field additions must be wired through three places: `Config` struct (`internal/config/config.go`), `ParseFlags`/`ApplyFlags` (same file), and `Validate`. Then update `README.md` "All options" table and `.code-review-hook.yaml.example`.
