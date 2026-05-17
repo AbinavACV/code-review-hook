@@ -13,10 +13,13 @@ import (
 	"github.com/openai/openai-go/v3"
 
 	"github.com/AbinavACV/code-review-hook/internal/comments"
+	"github.com/AbinavACV/code-review-hook/internal/compressdiff"
 	"github.com/AbinavACV/code-review-hook/internal/config"
 	"github.com/AbinavACV/code-review-hook/internal/diff"
 	"github.com/AbinavACV/code-review-hook/internal/output"
+	"github.com/AbinavACV/code-review-hook/internal/repocontext"
 	"github.com/AbinavACV/code-review-hook/internal/review"
+	"github.com/AbinavACV/code-review-hook/internal/tokens"
 )
 
 func main() {
@@ -64,6 +67,7 @@ func main() {
 
 	stagedDiff = diff.StripBinaryHunks(stagedDiff)
 	stagedDiff = diff.FilterExcludedFiles(stagedDiff, cfg.FileExcludePatterns)
+	stagedDiff = compressdiff.StripNoise(stagedDiff)
 
 	if strings.TrimSpace(stagedDiff) == "" {
 		output.PrintInfo("No reviewable changes after filtering. Skipping AI review.")
@@ -74,6 +78,14 @@ func main() {
 	if len(fileNames) > 0 {
 		output.PrintInfo(fmt.Sprintf("Reviewing %d file(s): %s", len(fileNames), strings.Join(fileNames, ", ")))
 	}
+
+	allHunks := diff.Hunks(stagedDiff)
+	collapsedHunks, collapseSummaries := compressdiff.CollapseDuplicates(allHunks)
+	if len(collapseSummaries) > 0 {
+		output.PrintInfo(fmt.Sprintf("Collapsed %d duplicate hunk cluster(s)", len(collapseSummaries)))
+	}
+
+	repoCtx := buildRepoContext(repoRoot, cfg, fileNames)
 
 	apiKey := cfg.ResolveAPIKey()
 	if apiKey == "" {
@@ -91,7 +103,11 @@ func main() {
 	defer cancel()
 
 	output.PrintInfo("Running AI code review...")
-	result, err := reviewer.Review(ctx, stagedDiff)
+	result, err := reviewer.Review(ctx, review.ReviewInput{
+		Hunks:             collapsedHunks,
+		CollapseSummaries: collapseSummaries,
+		RepoContext:       repoCtx,
+	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			output.PrintWarning(fmt.Sprintf("AI review timed out after %ds. Allowing commit.", cfg.TimeoutSeconds))
@@ -135,6 +151,56 @@ func main() {
 	}
 
 	output.PrintSuccess("AI code review passed.")
+}
+
+// buildRepoContext returns a compressed repo skeleton scoped to the changed
+// files plus files that reference any symbol defined in the changed files.
+// All failures are fail-open: warn and return "" so the review still runs.
+func buildRepoContext(repoRoot string, cfg config.Config, changedFiles []string) string {
+	if !cfg.RepoContextEnabled || len(changedFiles) == 0 {
+		return ""
+	}
+
+	symbols := repocontext.DetectSymbols(repoRoot, changedFiles)
+	referencing, err := repocontext.ReferencingFiles(repoRoot, symbols, cfg.FileExcludePatterns)
+	if err != nil {
+		output.PrintWarning("Could not scan for referencing files: " + err.Error())
+		referencing = nil
+	}
+
+	seen := make(map[string]struct{}, len(changedFiles)+len(referencing))
+	paths := make([]string, 0, len(changedFiles)+len(referencing))
+	for _, f := range changedFiles {
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		seen[f] = struct{}{}
+		paths = append(paths, f)
+	}
+	for _, f := range referencing {
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		if len(paths) >= cfg.RepoContextMaxFiles {
+			break
+		}
+		seen[f] = struct{}{}
+		paths = append(paths, f)
+	}
+
+	skeletons, err := repocontext.Build(repoRoot, paths)
+	if err != nil {
+		output.PrintWarning("Could not build repo context: " + err.Error())
+		return ""
+	}
+
+	body, truncated := repocontext.Assemble(skeletons, cfg.RepoContextMaxTokens)
+	suffix := ""
+	if truncated {
+		suffix = " (truncated to fit token budget)"
+	}
+	output.PrintInfo(fmt.Sprintf("Repo context: %d files, ~%d tokens%s", len(skeletons), tokens.Estimate(body), suffix))
+	return body
 }
 
 func displayResults(result *review.ReviewResult) {

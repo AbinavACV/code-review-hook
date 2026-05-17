@@ -6,7 +6,8 @@ AI-powered pre-commit hook that reviews your staged changes before every commit 
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.25+
+- A C toolchain (Xcode Command Line Tools on macOS, `build-essential` on Linux) — `tree-sitter` is CGo
 - [pre-commit](https://pre-commit.com/)
 - An API key for any OpenAI-compatible endpoint (OpenAI, Azure OpenAI, LiteLLM, Ollama, etc.)
 
@@ -98,6 +99,12 @@ Copy `.code-review-hook.yaml.example` from this repo as a starting point.
 | `custom_prompt` | string | `""` | — | Extra instructions appended to the system prompt (after rules) |
 | `save_comments` | bool | `true` | `--save-comments` | Write the latest review to `<comments_dir>/<branch>.md` |
 | `comments_dir` | string | `"comments"` | `--comments-dir` | Directory for review comment files (relative to repo root) |
+| `repo_context_enabled` | bool | `true` | `--repo-context` | Send a compressed whole-repo skeleton (signatures only) alongside the diff |
+| `repo_context_max_files` | int | `50` | `--repo-context-max-files` | Cap on files included in the skeleton |
+| `repo_context_max_tokens` | int | `8000` | `--repo-context-max-tokens` | Token budget for the skeleton |
+| `summarizer_enabled` | bool | `true` | `--summarize-hunks` | Run a cheap-model summarizer on each hunk in parallel before review |
+| `summarizer_model` | string | `gpt-4o-mini` | `--summarizer-model` | Model used for parallel hunk summaries |
+| `summarizer_concurrency` | int | `8` | — | Max parallel summarizer calls (1-32) |
 
 ### Precedence
 
@@ -146,6 +153,28 @@ The file content is injected into the AI's system prompt as a "Team rules" secti
 See `rules.md.example` in this repo for a Python-focused starting point you can adapt to your stack.
 
 If the rules file is missing, the hook warns and continues without rules (fail-open).
+
+---
+
+## Repo context (compressed)
+
+By default the hook sends a **compressed skeleton of the surrounding repository** alongside the diff. The skeleton contains only signatures and type declarations — no function bodies — so a 50k-LOC repo collapses to a few thousand tokens.
+
+The set of files in the skeleton is **diff-relative**: it always includes the changed files, then expands to files that reference any symbol defined in the changed files (whole-word match). This gives the reviewer cross-file awareness — callers of changed functions, types referenced by the diff, etc. — without sending the whole repo.
+
+Supported languages for skeleton extraction: **Go, Python, JavaScript, TypeScript (incl. TSX), Rust**. Other files contribute a one-line placeholder (`// path/file.ext (lang, N lines, no skeleton extractor)`).
+
+The grammars are compiled into the binary via CGo, so building the hook requires a C toolchain (Xcode Command Line Tools on macOS, `build-essential` on Linux). Most developer machines have this already.
+
+Tune via `repo_context_max_files` and `repo_context_max_tokens`. Set `repo_context_enabled: false` (or `--repo-context=false`) to disable.
+
+## Parallel hunk summarization
+
+Before the main review, every hunk in the diff is sent in parallel to a cheap model (`summarizer_model`, default `gpt-4o-mini`) which returns a 1-3 sentence summary. The reviewer then sees both the raw hunk and its summary side-by-side. This helps on large or mechanical diffs where the reviewer might otherwise miss the intent of a change.
+
+Trade-off: every commit pays for N+1 LLM calls (N summarizer + 1 reviewer). Set `summarizer_enabled: false` (or `--summarize-hunks=false`) to disable.
+
+Hunks that look identical across many files (mass renames, lint sweeps) are collapsed before summarization so you don't pay N times for the same edit.
 
 ---
 
@@ -289,3 +318,82 @@ Skips all pre-commit hooks entirely.
 ## Contributing
 
 Issues and PRs welcome at [github.com/AbinavACV/code-review-hook](https://github.com/AbinavACV/code-review-hook).
+
+### Prerequisites
+
+- Go 1.25+ (see `go.mod`)
+- A C toolchain (Xcode Command Line Tools on macOS, `build-essential` on Linux) — required because `tree-sitter` is CGo
+- `pre-commit` if you want to test the hook end-to-end against another repo
+
+### Build and test
+
+```bash
+make build      # bin/code-review-hook
+make test       # go test ./...
+make lint       # go vet ./...
+make tidy       # go mod tidy
+```
+
+Run a single test:
+
+```bash
+go test ./internal/review -run TestReviewer_Review -v
+```
+
+### Run the dev binary locally
+
+The binary expects to be invoked from inside a git repo with staged changes. After `make build`, point your shell at the local binary:
+
+```bash
+cd /path/to/some/test/repo
+git add <files>
+export LLM_API_KEY=sk-...
+/path/to/code-review-hook/bin/code-review-hook \
+  --model=gpt-4o-mini \
+  --severity-threshold=warning
+```
+
+This bypasses the `pre-commit` framework entirely and is the fastest dev loop.
+
+To test as a real pre-commit hook against a sibling repo, point `.pre-commit-config.yaml` at your local checkout instead of the GitHub URL:
+
+```yaml
+repos:
+  - repo: /absolute/path/to/code-review-hook
+    rev: HEAD
+    hooks:
+      - id: ai-code-review
+```
+
+Then `pre-commit install && pre-commit run --all-files` (or just `git commit`).
+
+### Pull request flow
+
+1. Branch from `main`.
+2. Make your change. Wire any new flag/YAML field through all three places (`Config` struct, `ParseFlags`/`ApplyFlags`, `Validate`) and update the "All options" table above + `.code-review-hook.yaml.example`.
+3. `make test && make lint`.
+4. Open a PR. The hook reviews itself on commit — fix or justify any blocking issues it raises.
+
+### Cutting a release
+
+Releases are plain git tags following semver (`vMAJOR.MINOR.PATCH`). `pre-commit` consumers pin to a tag via `rev:`, so once a tag is pushed it must not move.
+
+```bash
+# 1. Make sure main is clean and CI is green
+git checkout main
+git pull --ff-only
+
+# 2. Bump the example pin in README.md (Quick Start + Option 1) to the new version
+#    and commit that change on main first.
+
+# 3. Tag and push
+git tag -a v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
+```
+
+Versioning rules of thumb:
+- **Patch** (`v0.2.0` → `v0.2.1`): bug fixes, prompt tweaks, no flag/YAML changes
+- **Minor** (`v0.2.0` → `v0.3.0`): new flags, new YAML fields, new defaults that change behavior
+- **Major**: removed/renamed flags, changed exit-code semantics, breaking the fail-open contract
+
+After tagging, bump the `rev:` example in `README.md` for the next consumer copy-paste.

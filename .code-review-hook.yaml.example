@@ -58,3 +58,35 @@ timeout_seconds: 30
 # CLI flags: --save-comments=false to disable, --comments-dir to change path
 save_comments: true
 comments_dir: comments
+
+# Compressed whole-repo skeleton sent alongside the diff. Uses tree-sitter
+# (compiled into the binary) to extract signatures + types from files that
+# define or reference symbols changed in the diff. Helps the reviewer judge
+# cross-file impacts (callers of changed functions, types referenced, etc.)
+# without sending the full repo.
+# CLI flag: --repo-context
+repo_context_enabled: true
+
+# Cap on the number of files included in the repo skeleton (changed files
+# are always included first, then files that reference changed symbols).
+# CLI flag: --repo-context-max-files
+repo_context_max_files: 50
+
+# Cap on tokens used by the assembled repo skeleton. Larger files are added
+# first; smaller ones are dropped if the budget is exceeded.
+# CLI flag: --repo-context-max-tokens
+repo_context_max_tokens: 8000
+
+# Parallel hunk summarization. Before the main review, every hunk is sent
+# in parallel to a cheap model that returns a 1-3 sentence summary. The
+# reviewer sees raw diff + summary side by side. Costs an extra LLM call
+# per hunk but improves review quality on large/mechanical diffs.
+# CLI flag: --summarize-hunks
+summarizer_enabled: true
+
+# Cheap model used for parallel hunk summaries. Use a fast/cheap model here.
+# CLI flag: --summarizer-model
+summarizer_model: gpt-4o-mini
+
+# Max parallel summarizer calls (1-32). No CLI flag.
+summarizer_concurrency: 8
