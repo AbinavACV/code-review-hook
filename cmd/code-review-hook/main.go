@@ -16,6 +16,7 @@ import (
 	"github.com/AbinavACV/code-review-hook/internal/compressdiff"
 	"github.com/AbinavACV/code-review-hook/internal/config"
 	"github.com/AbinavACV/code-review-hook/internal/diff"
+	"github.com/AbinavACV/code-review-hook/internal/docs"
 	"github.com/AbinavACV/code-review-hook/internal/output"
 	"github.com/AbinavACV/code-review-hook/internal/repocontext"
 	"github.com/AbinavACV/code-review-hook/internal/review"
@@ -93,64 +94,78 @@ func main() {
 		os.Exit(1)
 	}
 
-	reviewer, err := review.NewReviewer(cfg)
-	if err != nil {
-		output.PrintWarning("Could not initialize reviewer: " + err.Error())
-		os.Exit(0)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	output.PrintInfo("Running AI code review...")
-	result, err := reviewer.Review(ctx, review.ReviewInput{
-		Hunks:             collapsedHunks,
-		CollapseSummaries: collapseSummaries,
-		RepoContext:       repoCtx,
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			output.PrintWarning(fmt.Sprintf("AI review timed out after %ds. Allowing commit.", cfg.TimeoutSeconds))
-		} else {
-			var apierr *openai.Error
-			if errors.As(err, &apierr) {
-				switch apierr.StatusCode {
-				case 401:
-					output.PrintWarning("API authentication failed (invalid API key). Allowing commit.")
-				case 429:
-					output.PrintWarning("API rate limit exceeded. Allowing commit. Try again shortly.")
-				default:
-					output.PrintWarning(fmt.Sprintf("API error (HTTP %d): %s. Allowing commit.", apierr.StatusCode, apierr.Message))
-				}
-			} else {
-				output.PrintWarning("AI review failed (allowing commit): " + err.Error())
-			}
-		}
-		os.Exit(0)
-	}
+	var reviewer *review.Reviewer
+	var result *review.ReviewResult
 
-	displayResults(result)
-
-	if cfg.SaveComments {
-		branch, err := diff.CurrentBranch(repoRoot)
+	if cfg.CodeReviewEnabled {
+		var err error
+		reviewer, err = review.NewReviewer(cfg)
 		if err != nil {
-			output.PrintWarning("Could not detect branch for comment file: " + err.Error())
-		} else {
-			hunks := diff.Hunks(stagedDiff)
-			if err := comments.Write(repoRoot, cfg.CommentsDir, branch, result, hunks); err != nil {
-				output.PrintWarning("Could not save review comments: " + err.Error())
+			output.PrintWarning("Could not initialize reviewer: " + err.Error())
+			os.Exit(0)
+		}
+
+		output.PrintInfo("Running AI code review...")
+		result, err = reviewer.Review(ctx, review.ReviewInput{
+			Hunks:             collapsedHunks,
+			CollapseSummaries: collapseSummaries,
+			RepoContext:       repoCtx,
+		})
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				output.PrintWarning(fmt.Sprintf("AI review timed out after %ds. Allowing commit.", cfg.TimeoutSeconds))
 			} else {
-				output.PrintInfo("Review comments saved to " + cfg.CommentsDir + "/" + comments.SanitizeBranch(branch) + ".md")
+				var apierr *openai.Error
+				if errors.As(err, &apierr) {
+					switch apierr.StatusCode {
+					case 401:
+						output.PrintWarning("API authentication failed (invalid API key). Allowing commit.")
+					case 429:
+						output.PrintWarning("API rate limit exceeded. Allowing commit. Try again shortly.")
+					default:
+						output.PrintWarning(fmt.Sprintf("API error (HTTP %d): %s. Allowing commit.", apierr.StatusCode, apierr.Message))
+					}
+				} else {
+					output.PrintWarning("AI review failed (allowing commit): " + err.Error())
+				}
+			}
+			os.Exit(0)
+		}
+
+		displayResults(result)
+
+		if cfg.SaveComments {
+			branch, err := diff.CurrentBranch(repoRoot)
+			if err != nil {
+				output.PrintWarning("Could not detect branch for comment file: " + err.Error())
+			} else {
+				hunks := diff.Hunks(stagedDiff)
+				if err := comments.Write(repoRoot, cfg.CommentsDir, branch, result, hunks); err != nil {
+					output.PrintWarning("Could not save review comments: " + err.Error())
+				} else {
+					output.PrintInfo("Review comments saved to " + cfg.CommentsDir + "/" + comments.SanitizeBranch(branch) + ".md")
+				}
 			}
 		}
 	}
 
-	if reviewer.ShouldBlock(result) {
+	if cfg.DocsEnabled {
+		generateDocumentation(ctx, repoRoot, cfg, repoCtx, stagedDiff, fileNames)
+	}
+
+	if cfg.CodeReviewEnabled && reviewer.ShouldBlock(result) {
 		output.PrintError("Commit blocked by AI code review. Use --no-verify to bypass.")
 		os.Exit(1)
 	}
 
-	output.PrintSuccess("AI code review passed.")
+	if cfg.CodeReviewEnabled {
+		output.PrintSuccess("AI code review passed.")
+	} else if cfg.DocsEnabled {
+		output.PrintSuccess("Documentation generated successfully.")
+	}
 }
 
 // buildRepoContext returns a compressed repo skeleton scoped to the changed
@@ -219,4 +234,30 @@ func displayResults(result *review.ReviewResult) {
 			output.PrintInfo("[INFO]  " + location + " — " + issue.Message)
 		}
 	}
+}
+
+func generateDocumentation(ctx context.Context, repoRoot string, cfg config.Config, repoCtx, stagedDiff string, changedFiles []string) {
+	gen, err := docs.NewGeneratorFromConfig(cfg)
+	if err != nil {
+		output.PrintWarning("Could not initialize doc generator: " + err.Error())
+		return
+	}
+
+	output.PrintInfo("Generating documentation...")
+	docResult, err := gen.Generate(ctx, docs.GeneratorInput{
+		RepoContext:  repoCtx,
+		StagedDiff:   stagedDiff,
+		ChangedFiles: changedFiles,
+	})
+	if err != nil {
+		output.PrintWarning("Documentation generation failed: " + err.Error())
+		return
+	}
+
+	if err := docs.WriteDocumentation(repoRoot, cfg.DocsDir, docResult); err != nil {
+		output.PrintWarning("Could not write documentation: " + err.Error())
+		return
+	}
+
+	output.PrintSuccess("Documentation updated successfully.")
 }

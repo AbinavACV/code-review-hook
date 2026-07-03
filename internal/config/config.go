@@ -34,6 +34,10 @@ type Config struct {
 	SummarizerEnabled     bool   `yaml:"summarizer_enabled"`
 	SummarizerModel       string `yaml:"summarizer_model"`
 	SummarizerConcurrency int    `yaml:"summarizer_concurrency"`
+
+	DocsEnabled       bool   `yaml:"docs_enabled"`
+	DocsDir           string `yaml:"docs_dir"`
+	CodeReviewEnabled bool   `yaml:"code_review_enabled"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -59,6 +63,10 @@ func Default() Config {
 		SummarizerEnabled:     true,
 		SummarizerModel:       "gpt-4o-mini",
 		SummarizerConcurrency: 8,
+
+		DocsEnabled:       true,
+		DocsDir:           "docs",
+		CodeReviewEnabled: true,
 	}
 }
 
@@ -116,6 +124,10 @@ type Flags struct {
 	RepoContextMaxTokens *int
 	SummarizerEnabled    *bool
 	SummarizerModel      *string
+
+	DocsEnabled       *bool
+	DocsDir           *string
+	CodeReviewEnabled *bool
 }
 
 // ParseFlags parses args using fs and returns only the flags that were
@@ -135,6 +147,9 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 	repoCtxMaxTokens := fs.Int("repo-context-max-tokens", 0, "Cap on tokens used by the repo skeleton (>=500)")
 	summarize := fs.Bool("summarize-hunks", true, "Run a cheap-model summarizer on each hunk in parallel before review")
 	summarizerModel := fs.String("summarizer-model", "", "LLM model used for parallel hunk summarization")
+	docsEnabled := fs.Bool("docs-enabled", true, "Generate or update ARCHITECTURE.md and CHANGELOG.md in docs folder")
+	docsDir := fs.String("docs-dir", "", "Directory for generated documentation (relative to repo root)")
+	codeReviewEnabled := fs.Bool("code-review-enabled", true, "Run AI code review (blocking, based on severity_threshold)")
 
 	if err := fs.Parse(args); err != nil {
 		return Flags{}, err
@@ -171,6 +186,12 @@ func ParseFlags(fs *flag.FlagSet, args []string) (Flags, error) {
 			flags.SummarizerEnabled = summarize
 		case "summarizer-model":
 			flags.SummarizerModel = summarizerModel
+		case "docs-enabled":
+			flags.DocsEnabled = docsEnabled
+		case "docs-dir":
+			flags.DocsDir = docsDir
+		case "code-review-enabled":
+			flags.CodeReviewEnabled = codeReviewEnabled
 		}
 	})
 	return flags, nil
@@ -221,6 +242,15 @@ func ApplyFlags(cfg *Config, flags Flags) {
 	if flags.SummarizerModel != nil {
 		cfg.SummarizerModel = *flags.SummarizerModel
 	}
+	if flags.DocsEnabled != nil {
+		cfg.DocsEnabled = *flags.DocsEnabled
+	}
+	if flags.DocsDir != nil {
+		cfg.DocsDir = *flags.DocsDir
+	}
+	if flags.CodeReviewEnabled != nil {
+		cfg.CodeReviewEnabled = *flags.CodeReviewEnabled
+	}
 	applyFailOnWarning(cfg)
 }
 
@@ -247,6 +277,9 @@ func (c Config) Validate() error {
 	}
 	if c.SummarizerEnabled && (c.SummarizerConcurrency < 1 || c.SummarizerConcurrency > 32) {
 		return fmt.Errorf("summarizer_concurrency must be between 1 and 32")
+	}
+	if !c.CodeReviewEnabled && !c.DocsEnabled {
+		return fmt.Errorf("at least one of code_review_enabled or docs_enabled must be true")
 	}
 	return nil
 }
